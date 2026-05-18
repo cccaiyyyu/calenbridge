@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "105456248073",
+    "project_id": "calenbridge",
+    "storage_bucket": "calenbridge.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:105456248073:android:ff62f61ce2ccbab9739fd8",
+        "android_client_info": {
+          "package_name": "com.example.calenbridge"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "105456248073-rsrh6j48tm01pb73mcbl7r44cgkrj2dq.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCXkjT0ZyiG8QsQzo23HnshdabP0vjWqHE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "105456248073-rsrh6j48tm01pb73mcbl7r44cgkrj2dq.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
