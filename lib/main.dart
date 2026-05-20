@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 // 🎯 核心套件引入：徹底解決所有紅線與 Firebase 初始化問題
 import 'package:firebase_core/firebase_core.dart';
-import 'screens/login_screen.dart'; // 確保能正確引導到登入畫面
+import 'screens/login_screen.dart';
 
 void main() async {
   // 1. 確保 Flutter 引擎組件在非同步執行前完全初始化
@@ -41,7 +41,7 @@ class CalenBridge extends StatelessWidget {
         primaryColor: const Color(0xFF003366), // 你們的高質感深海藍主色調
         useMaterial3: true,
       ),
-      home: const LoginScreen(), // 🚪 專案的第一道大門：引導至登入畫面
+      home: LoginScreen(), // 🚪 專案的第一道大門：引導至登入畫面
     );
   }
 }

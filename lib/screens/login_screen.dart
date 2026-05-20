@@ -1,156 +1,146 @@
 import 'package:flutter/material.dart';
-import 'home_screen.dart'; // 確保 home_screen.dart 與此檔案在同一個 screens 資料夾下
-import 'package:google_sign_in/google_sign_in.dart';
-// 🎯 這是你剛剛少引入的關鍵：Firebase Auth 核心套件
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'register_info_screen.dart';
+import 'home_screen.dart';
 
-class LoginScreen extends StatelessWidget {
+class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
+
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  bool _isLoading = false;
+
+  // 🎯 核心邏輯：執行 Google 登入並判斷新舊會員
+  Future<void> _handleGoogleSignIn() async {
+    setState(() { _isLoading = true; });
+
+    try {
+      // 1. 觸發 Google 登入 (使用支援 Web 的 Popup 方式)
+      GoogleAuthProvider googleProvider = GoogleAuthProvider();
+      UserCredential userCredential = await FirebaseAuth.instance.signInWithPopup(googleProvider);
+      User? user = userCredential.user;
+
+      if (user != null) {
+        print("【CalenBridge】登入成功，正在檢查是否為新會員... UID: ${user.uid}");
+        
+        // 2. 檢查 Firestore 中是否已經有這個使用者的資料
+        DocumentSnapshot userDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .get();
+
+        if (!mounted) return; // 確保畫面還在才進行導航
+
+        if (userDoc.exists) {
+          // 🙋‍♂️ 老會員 ➔ 直接跳轉「首頁」
+          print("【CalenBridge】老會員回來了，導向首頁！");
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => const HomeScreen()),
+          );
+        } else {
+          // 👶 新會員 ➔ 強制導向「個資設定頁」
+          print("【CalenBridge】新會員初次登入，導向個資設定頁！");
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => const RegisterInfoScreen()),
+          );
+        }
+      }
+    } catch (e) {
+      if (!mounted) return;
+      print("【CalenBridge】登入失敗: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('登入失敗: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() { _isLoading = false; });
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      // 繼承全域背景色 bgGray
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(28.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // 1. 日曆圖標
-              Icon(
-                Icons.calendar_month_rounded,
-                size: 90,
-                color: Theme.of(context).primaryColor, // 自動抓取深海藍
-              ),
-              const SizedBox(height: 20),
-              
-              // 2. 專案名稱與副標
-              const Text(
-                'CalenBridge',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 36,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1.5,
-                ),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                '智慧行事曆跨團隊橋樑',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey, fontSize: 16),
-              ),
-              const SizedBox(height: 60), // 拉開跟按鈕的距離，讓畫面呼吸
-              
-              // 3. 🎯 串接整合 Google 登入與 Firebase Auth 服務的核心按鈕
-              OutlinedButton(
-                onPressed: () async {
-                  try {
-                    print("【CalenBridge】第一階段：啟動 Google 認證觸發方法...");
-                    
-                    // 帶入你昨晚查到的真實 Web Client ID
-                    final GoogleSignIn googleSignIn = GoogleSignIn(
-                      clientId: '105456248073-7p478blrecon0e5v5b78sh6dfphb1obs.apps.googleusercontent.com',
-                    );
-                    
-                    // 1. 拉起 Google 帳號選擇視窗
-                    final GoogleSignInAccount? googleUser = await googleSignIn.signIn();
-                    
-                    if (googleUser == null) {
-                      print("【CalenBridge】使用者取消了 Google 登入視窗。");
-                      return; // 使用者中途關閉視窗，直接攔截並結束
-                    }
-                    
-                    print("【CalenBridge】第二階段：Google 驗證成功，正在擷取身分驗證權杖...");
-                    // 2. 從 Google 帳號中取得金鑰認證資料
-                    final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
-                    
-                    // 3. 將 Google 拿到的通行證，轉換成 Firebase Auth 的登入憑證
-                    final OAuthCredential credential = GoogleAuthProvider.credential(
-                      accessToken: googleAuth.accessToken,
-                      idToken: googleAuth.idToken,
-                    );
-                    
-                    print("【CalenBridge】第三階段：將憑證送往 Firebase Auth 後台進行驗收與使用者生成...");
-                    // 4. 傳送憑證讓 Firebase 服務在後台生成並認證使用者資訊
-                    final UserCredential userCredential = await FirebaseAuth.instance.signInWithCredential(credential);
-                    
-                    final User? firebaseUser = userCredential.user;
-                    
-                    if (firebaseUser != null) {
-                      print("【CalenBridge】🔥 Firebase 后台驗收成功！使用者資訊生成完畢 🔥");
-                      print("唯一識別碼 UID: ${firebaseUser.uid}");
-                      print("使用者名稱: ${firebaseUser.displayName}");
+        child: Center(
+          child: _isLoading
+              ? const CircularProgressIndicator()
+              : SingleChildScrollView(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      // 📅 你的行事曆 Icon，顏色套用你的主色調 primaryBlue
+                      const Icon(
+                        Icons.calendar_month_rounded,
+                        size: 100,
+                        color: Color(0xFF203764), 
+                      ),
+                      const SizedBox(height: 24),
                       
-                      if (!context.mounted) return;
-
-                      // 彈出成功提示
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Firebase 後台驗收成功！歡迎回來，${firebaseUser.displayName}！')),
-                      );
-
-                      // 跳轉到首頁且無法返回
-                      Navigator.pushReplacement(
-                        context,
-                        MaterialPageRoute(builder: (context) => const HomeScreen()),
-                      );
-                    }
-                  } on FirebaseAuthException catch (e) {
-                    // 專門擷取 Firebase 服務噴出的特定異常
-                    print("【CalenBridge】Firebase Auth 後台驗收失敗: [${e.code}] ${e.message}");
-                    if (!context.mounted) return;
-                    _showErrorDialog(context, "Firebase 後台拒絕驗收", "錯誤代碼: ${e.code}\n${e.message}");
-                  } catch (error) {
-                    // 擷取其餘未知異常（例如你剛剛遇到的 popup_closed）
-                    print("【CalenBridge】系統認證擷取到異常邏輯: $error");
-                    if (!context.mounted) return;
-                    _showErrorDialog(context, "安全認證失敗", "在串接服務時擷取到異常邏輯，請重試。\n錯誤代碼: $error");
-                  }
-                },
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  side: BorderSide(color: Colors.grey.shade300, width: 1.5),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
+                      // 📌 主標題，套用你的文字主色 textDark
+                      const Text(
+                        'CalenBridge',
+                        style: TextStyle(
+                          fontSize: 32,
+                          fontWeight: FontWeight.w900,
+                          color: Color(0xFF1F2937),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      
+                      // 💡 副標題
+                      const Text(
+                        '智慧行事曆跨團隊橋樑',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                      const SizedBox(height: 60),
+                      
+                      // 🚀 Google 登入按鈕
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 40),
+                        child: OutlinedButton.icon(
+                          onPressed: _handleGoogleSignIn,
+                          icon: const Text(
+                            'G', 
+                            style: TextStyle(
+                              color: Color(0xFF203764), // 套用主色調
+                              fontWeight: FontWeight.bold,
+                              fontSize: 18,
+                            ),
+                          ),
+                          label: const Text(
+                            '使用 Google 帳號登入',
+                            style: TextStyle(
+                              color: Color(0xFF1F2937), // 套用文字主色
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            backgroundColor: Colors.white,
+                            minimumSize: const Size.fromHeight(54),
+                            side: const BorderSide(color: Color(0xFFE5E7EB)), // 與輸入框邊框一致
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12), // 現代感圓角
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.g_mobiledata_rounded, size: 30, color: Theme.of(context).primaryColor),
-                    const SizedBox(width: 8),
-                    const Text(
-                      '使用 Google 帳號登入',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.black87,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
         ),
-      ),
-    );
-  }
-
-  // 抽離出的精緻 Dialog 提示
-  void _showErrorDialog(BuildContext context, String title, String content) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.redAccent)),
-        content: Text(content),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('確認'),
-          ),
-        ],
       ),
     );
   }
