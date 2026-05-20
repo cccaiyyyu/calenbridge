@@ -1,14 +1,12 @@
 import 'package:flutter/material.dart';
-// 🎯 核心套件引入：徹底解決所有紅線與 Firebase 初始化問題
 import 'package:firebase_core/firebase_core.dart';
-import 'screens/login_screen.dart';
+import 'theme/app_theme.dart';
+import 'screens/login_screen.dart'; 
 
 void main() async {
-  // 1. 確保 Flutter 引擎組件在非同步執行前完全初始化
   WidgetsFlutterBinding.ensureInitialized();
 
   try {
-    // 2. 🎯 明確傳入 Firebase 網頁版的初始化參數，徹底解決 JavaScriptObject 型態異常！
     await Firebase.initializeApp(
       options: const FirebaseOptions(
         apiKey: "AIzaSyAVwy9AvgJsMryr-oILCndXslKv2A16vKw",
@@ -24,11 +22,9 @@ void main() async {
     print("【CalenBridge】Firebase 初始化時發生異常: $e");
   }
 
-  // 3. 啟動 App 根組件
   runApp(const CalenBridge());
 }
 
-// 🎯 這是剛剛不小心被洗掉的靈魂根組件！補回來就完全沒錯誤了！
 class CalenBridge extends StatelessWidget {
   const CalenBridge({super.key});
 
@@ -36,12 +32,10 @@ class CalenBridge extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'CalenBridge',
-      debugShowCheckedModeBanner: false, // 隱藏右上角除錯布條，讓畫面更精緻
-      theme: ThemeData(
-        primaryColor: const Color(0xFF003366), // 你們的高質感深海藍主色調
-        useMaterial3: true,
-      ),
-      home: LoginScreen(), // 🚪 專案的第一道大門：引導至登入畫面
+      debugShowCheckedModeBanner: false, 
+      theme: AppTheme.lightTheme, 
+      // 🎯 重點：這裡的 LoginScreen() 前面「絕對不能」加 const！
+      home: LoginScreen(), 
     );
   }
 }

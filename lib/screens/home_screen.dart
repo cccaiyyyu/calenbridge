@@ -1,118 +1,282 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
-class HomeScreen extends StatelessWidget {
+import 'login_screen.dart';
+import '../widgets/add_todo_bottom_sheet.dart';
+
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  final User? _currentUser = FirebaseAuth.instance.currentUser;
+  
+  String _selectedTab = "所有"; 
+  List<Map<String, String>> _groupTabs = [
+    {"id": "all", "name": "所有"},
+    {"id": "personal", "name": "個人"},
+  ];
+
+  bool _isLoadingGroups = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchUserGroups();
+  }
+
+  Future<void> _fetchUserGroups() async {
+    if (_currentUser == null) return;
+    try {
+      DocumentSnapshot userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(_currentUser!.uid)
+          .get();
+
+      if (userDoc.exists && userDoc.data() != null) {
+        final userData = userDoc.data() as Map<String, dynamic>;
+        List<dynamic> groupIds = userData['groupIds'] ?? [];
+
+        List<Map<String, String>> fetchedTabs = [
+          {"id": "all", "name": "所有"},
+          {"id": "personal", "name": "個人"},
+        ];
+
+        if (groupIds.isNotEmpty) {
+          QuerySnapshot groupDocs = await FirebaseFirestore.instance
+              .collection('groups')
+              .where(FieldPath.documentId, whereIn: groupIds)
+              .get();
+
+          for (var doc in groupDocs.docs) {
+            final groupData = doc.data() as Map<String, dynamic>;
+            fetchedTabs.add({
+              "id": doc.id,
+              "name": groupData['groupName'] ?? "未命名小組",
+            });
+          }
+        }
+
+        if (mounted) {
+          setState(() {
+            _groupTabs = fetchedTabs;
+            _isLoadingGroups = false;
+          });
+        }
+      } else {
+        if (mounted) setState(() { _isLoadingGroups = false; });
+      }
+    } catch (e) {
+      if (mounted) setState(() { _isLoadingGroups = false; });
+    }
+  }
+
+  // 🎯 核心優化 1：這裡「完全不要加上 orderBy」，避免引發 Firebase 複合索引崩潰阻擋
+  Query _buildTodoQuery() {
+    Query query = FirebaseFirestore.instance
+        .collection('todos')
+        .where('ownerUid', isEqualTo: _currentUser?.uid);
+
+    if (_selectedTab == "個人") {
+      query = query.where('groupId', isEqualTo: 'personal');
+    } else if (_selectedTab != "所有") {
+      final targetGroup = _groupTabs.firstWhere(
+        (t) => t['name'] == _selectedTab,
+        orElse: () => {"id": ""},
+      );
+      query = query.where('groupId', isEqualTo: targetGroup['id']);
+    }
+
+    return query;
+  }
+
+  void _openTodoBottomSheet({String? todoId, Map<String, dynamic>? initialData}) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true, 
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (BuildContext context) {
+        return AddTodoBottomSheet(
+          currentSelectedTab: _selectedTab,
+          groupTabs: _groupTabs,
+          todoId: todoId,                 
+          initialData: initialData,       
+          onTodoAdded: () {
+            setState(() {}); 
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _handleSignOut() async {
+    await FirebaseAuth.instance.signOut();
+    if (!mounted) return;
+    Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const LoginScreen()));
+  }
+
+  String _formatDateTimeString(String? isoString) {
+    if (isoString == null || isoString.isEmpty) return '未設定截止時間';
+    try {
+      final dateTime = DateTime.parse(isoString);
+      final month = dateTime.month.toString().padLeft(2, '0');
+      final day = dateTime.day.toString().padLeft(2, '0');
+      final hour = dateTime.hour.toString().padLeft(2, '0');
+      final minute = dateTime.minute.toString().padLeft(2, '0');
+      return '${dateTime.year}-$month-$day $hour:$minute';
+    } catch (e) {
+      return isoString;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // 右下角的新增任務按鈕 (Floating Action Button)
       floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          // TODO: 觸發新增任務邏輯
-        },
-        child: const Icon(Icons.add, size: 30),
+        onPressed: () => _openTodoBottomSheet(), 
+        backgroundColor: const Color(0xFFE6E0F8), 
+        child: const Icon(Icons.add, color: Color(0xFF1D1B20), size: 30),
       ),
-      body: SafeArea(
-        child: Row(
-          children: [
-            // 1. 左側邊欄 (Sidebars)
-            Container(
-              width: 60,
-              color: Colors.grey.shade100,
-              child: Column(
-                children: [
-                  const SizedBox(height: 16),
-                  IconButton(icon: const Icon(Icons.menu), onPressed: () {}),
-                  IconButton(icon: const Icon(Icons.home), onPressed: () {}),
-                  IconButton(icon: const Icon(Icons.settings), onPressed: () {}),
-                ],
-              ),
+      body: Row(
+        children: [
+          NavigationRail(
+            selectedIndex: 0,
+            onDestinationSelected: (int index) {
+              if (index == 1) _handleSignOut(); 
+            },
+            labelType: NavigationRailLabelType.none,
+            destinations: const [
+              NavigationRailDestination(icon: Icon(Icons.home_rounded), label: Text('首頁')),
+              NavigationRailDestination(icon: Icon(Icons.settings_rounded), label: Text('設定')),
+            ],
+            leading: const Padding(
+              padding: EdgeInsets.symmetric(vertical: 24.0),
+              child: Icon(Icons.menu_rounded, size: 28),
             ),
-            
-            // 分隔線
-            VerticalDivider(width: 1, thickness: 1, color: Colors.grey.shade300),
-
-            // 2. 右側主要內容區 (包含 Tab Bar 與 待辦事項)
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // 上方的頂部標籤列 (Tab Bar 區塊)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                    color: Colors.white,
-                    child: Row(
-                      children: [
-                        _buildTabButton('標籤一', isActive: true),
-                        const SizedBox(width: 8),
-                        _buildTabButton('標籤二'),
-                        const SizedBox(width: 8),
-                        _buildTabButton('標籤三'),
-                      ],
-                    ),
-                  ),
-                  Divider(height: 1, thickness: 1, color: Colors.grey.shade200),
-
-                  // 下方的待辦事項內容區 (待辦事項)
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.all(16.0),
-                      child: ListView(
-                        children: [
-                          const Text(
-                            '待辦事項',
-                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          const VerticalDivider(thickness: 1, width: 1),
+          Expanded(
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _isLoadingGroups
+                        ? const SizedBox(height: 40, child: Center(child: CircularProgressIndicator()))
+                        : SizedBox(
+                            height: 40,
+                            child: ListView.builder(
+                              scrollDirection: Axis.horizontal,
+                              itemCount: _groupTabs.length,
+                              itemBuilder: (context, index) {
+                                final tabName = _groupTabs[index]['name']!;
+                                final isSelected = _selectedTab == tabName;
+                                return Container(
+                                  margin: const EdgeInsets.only(right: 8),
+                                  child: ChoiceChip(
+                                    label: Text(tabName),
+                                    selected: isSelected,
+                                    onSelected: (bool selected) {
+                                      if (selected) {
+                                        setState(() { _selectedTab = tabName; });
+                                      }
+                                    },
+                                  ),
+                                );
+                              },
+                            ),
                           ),
-                          const SizedBox(height: 12),
-                          _buildTodoItem('這是一項待辦任務卡片...'),
-                          _buildTodoItem('這是另一項待辦任務卡片...'),
-                        ],
+                    const SizedBox(height: 24),
+                    const Text(
+                      '待辦事項',
+                      style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 16),
+                    Expanded(
+                      child: StreamBuilder<QuerySnapshot>(
+                        stream: _buildTodoQuery().snapshots(),
+                        builder: (context, snapshot) {
+                          if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
+                            return const Center(child: CircularProgressIndicator());
+                          }
+                          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                            return const Center(child: Text('目前沒有待辦事項喔！', style: TextStyle(color: Colors.grey)));
+                          }
+
+                          // 🎯 核心優化 2：直接在前端使用 Dart 對快取資料進行無痛時間排序！
+                          // 複製一份資料列表
+                          List<QueryDocumentSnapshot> todos = List.from(snapshot.data!.docs);
+                          
+                          // 依照 endTime 進行由近到遠的「升冪排序」
+                          todos.sort((a, b) {
+                            final Map<String, dynamic> dataA = a.data() as Map<String, dynamic>;
+                            final Map<String, dynamic> dataB = b.data() as Map<String, dynamic>;
+                            
+                            final String timeA = dataA['endTime'] ?? '';
+                            final String timeB = dataB['endTime'] ?? '';
+                            
+                            return timeA.compareTo(timeB); 
+                          });
+
+                          return ListView.builder(
+                            itemCount: todos.length,
+                            itemBuilder: (context, index) {
+                              final doc = todos[index];
+                              final todo = doc.data() as Map<String, dynamic>;
+                              
+                              return Card(
+                                margin: const EdgeInsets.only(bottom: 12),
+                                shape: RoundedRectangleBorder(
+                                  side: BorderSide(color: Colors.grey.shade300),
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(16),
+                                  onTap: () => _openTodoBottomSheet(
+                                    todoId: doc.id, 
+                                    initialData: todo
+                                  ),
+                                  child: ListTile(
+                                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                    leading: Container(
+                                      width: 12, height: 12,
+                                      decoration: BoxDecoration(
+                                        color: Color(todo['color'] ?? 0xFF203764),
+                                        shape: BoxShape.circle,
+                                      ),
+                                    ),
+                                    title: Text(
+                                      todo['title'] ?? '未命名', 
+                                      style: const TextStyle(fontWeight: FontWeight.w600),
+                                    ),
+                                    subtitle: Text(
+                                      '截止時間: ${_formatDateTimeString(todo['endTime'])}',
+                                      style: TextStyle(color: Colors.grey.shade600),
+                                    ),
+                                    trailing: Chip(
+                                      label: Text(todo['groupId'] == 'personal' ? '個人' : '小組', style: const TextStyle(fontSize: 12)),
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          );
+                        },
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // 輔助小元件：Tab 標籤按鈕
-  Widget _buildTabButton(String text, {bool isActive = false}) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-      decoration: BoxDecoration(
-        color: isActive ? Colors.blue.shade50 : Colors.grey.shade100,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: isActive ? Colors.blue : Colors.transparent),
-      ),
-      child: Text(
-        text,
-        style: TextStyle(
-          fontSize: 14,
-          color: isActive ? Colors.blue : Colors.black87,
-          fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
-        ),
-      ),
-    );
-  }
-
-  // 輔助小元件：待辦事項卡片
-  Widget _buildTodoItem(String content) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(24), // 依據你的設計圖，卡片內部有較大留白
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.black, width: 1.5), // 依據圖中明顯的黑線外框
-      ),
-      child: Text(
-        content,
-        style: const TextStyle(fontSize: 16),
+          ),
+        ],
       ),
     );
   }

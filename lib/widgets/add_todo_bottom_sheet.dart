@@ -1,0 +1,417 @@
+import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+
+class AddTodoBottomSheet extends StatefulWidget {
+  final String currentSelectedTab;
+  final List<Map<String, String>> groupTabs;
+  final VoidCallback onTodoAdded; 
+
+  // 編輯模式專用
+  final String? todoId;
+  final Map<String, dynamic>? initialData;
+
+  const AddTodoBottomSheet({
+    super.key,
+    required this.currentSelectedTab,
+    required this.groupTabs,
+    required this.onTodoAdded,
+    this.todoId,
+    this.initialData,
+  });
+
+  @override
+  State<AddTodoBottomSheet> createState() => _AddTodoBottomSheetState();
+}
+
+class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
+  final User? _currentUser = FirebaseAuth.instance.currentUser;
+  final TextEditingController _titleController = TextEditingController();
+  final TextEditingController _noteController = TextEditingController();
+  
+  late int _selectedColorValue; 
+  late DateTime _startDateTime;
+  late DateTime _endDateTime;
+  late String _reminderSetting;
+  late String _repeatSetting;
+  late String _selectedGroupId;
+
+  bool _isSaving = false;
+
+  final List<int> _colorOptions = [0xFF203764, 0xFFE53935, 0xFF43A047, 0xFFFB8C00, 0xFF8E24AA, 0xFF00ACC1];
+  final List<String> _reminderOptions = ["開始時間點", "10分鐘前", "一小時前", "一天前", "自訂"];
+  final List<String> _repeatOptions = ["不要", "每天", "每週", "每個月", "每年"];
+
+  bool get _isEditMode => widget.todoId != null; 
+
+  @override
+  void initState() {
+    super.initState();
+    
+    if (_isEditMode && widget.initialData != null) {
+      final data = widget.initialData!;
+      _titleController.text = data['title'] ?? '';
+      _noteController.text = data['note'] ?? '';
+      _selectedColorValue = data['color'] ?? 0xFF203764;
+      _startDateTime = DateTime.parse(data['startTime'] ?? DateTime.now().toIso8601String());
+      _endDateTime = DateTime.parse(data['endTime'] ?? DateTime.now().add(const Duration(hours: 1)).toIso8601String());
+      _reminderSetting = data['reminderSetting'] ?? "開始時間點";
+      _repeatSetting = data['repeatSetting'] ?? "不要";
+      _selectedGroupId = data['groupId'] ?? "personal";
+    } else {
+      _selectedColorValue = 0xFF203764; 
+      _startDateTime = DateTime.now().add(const Duration(minutes: 30));
+      _endDateTime = DateTime.now().add(const Duration(hours: 1, minutes: 30));
+      _reminderSetting = "開始時間點";
+      _repeatSetting = "不要";
+      _selectedGroupId = "personal";
+
+      if (widget.currentSelectedTab != "所有" && widget.currentSelectedTab != "個人") {
+        final currentTab = widget.groupTabs.firstWhere(
+          (t) => t['name'] == widget.currentSelectedTab, 
+          orElse: () => {"id": "personal"}
+        );
+        _selectedGroupId = currentTab['id']!;
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _noteController.dispose();
+    super.dispose();
+  }
+
+  // 🎯 核心滾輪渲染元件：打造上下滑動的 3D 滾輪
+  Widget _buildTimeWheel({
+    required int itemCount,
+    required int selectedValue,
+    required ValueChanged<int> onSelectedItemChanged,
+  }) {
+    return SizedBox(
+      height: 90, 
+      width: 45,   
+      child: ListWheelScrollView.useDelegate(
+        controller: FixedExtentScrollController(initialItem: selectedValue),
+        itemExtent: 30, 
+        perspective: 0.004, 
+        diameterRatio: 1.1, 
+        physics: const FixedExtentScrollPhysics(), 
+        onSelectedItemChanged: onSelectedItemChanged,
+        childDelegate: ListWheelChildBuilderDelegate(
+          childCount: itemCount,
+          builder: (context, index) {
+            final isSelected = index == selectedValue;
+            return Center(
+              child: Text(
+                index.toString().padLeft(2, '0'),
+                style: TextStyle(
+                  fontSize: isSelected ? 22 : 15,
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                  color: isSelected ? Colors.black : Colors.grey.shade400,
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  // 🎯 封裝重複的時間選擇 UI 區塊（包含日期點擊按鈕與時間滾輪）
+  Widget _buildDateTimePickerSection({
+    required String label,
+    required DateTime currentDateTime,
+    required Function(DateTime) onDateTimeChanged,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Row(
+        children: [
+          // 左側：日期選擇按鈕
+          Expanded(
+            child: InkWell(
+              onTap: () async {
+                final pickedDate = await showDatePicker(
+                  context: context,
+                  initialDate: currentDateTime,
+                  firstDate: DateTime(2025),
+                  lastDate: DateTime(2030),
+                );
+                if (pickedDate != null) {
+                  onDateTimeChanged(DateTime(
+                    pickedDate.year,
+                    pickedDate.month,
+                    pickedDate.day,
+                    currentDateTime.hour,
+                    currentDateTime.minute,
+                  ));
+                }
+              },
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(label, style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                  const SizedBox(height: 4),
+                  Text(
+                    "${currentDateTime.year}/${currentDateTime.month.toString().padLeft(2, '0')}/${currentDateTime.day.toString().padLeft(2, '0')}",
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF203764)),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          
+          const VerticalDivider(width: 20, thickness: 1),
+
+          // 右側：24小時制時間滾輪
+          Row(
+            children: [
+              _buildTimeWheel(
+                itemCount: 24,
+                selectedValue: currentDateTime.hour,
+                onSelectedItemChanged: (h) {
+                  onDateTimeChanged(DateTime(
+                    currentDateTime.year,
+                    currentDateTime.month,
+                    currentDateTime.day,
+                    h,
+                    currentDateTime.minute,
+                  ));
+                },
+              ),
+              const Text(':', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+              _buildTimeWheel(
+                itemCount: 60,
+                selectedValue: currentDateTime.minute,
+                onSelectedItemChanged: (m) {
+                  onDateTimeChanged(DateTime(
+                    currentDateTime.year,
+                    currentDateTime.month,
+                    currentDateTime.day,
+                    currentDateTime.hour,
+                    m,
+                  ));
+                },
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _deleteTodo() async {
+    if (!_isEditMode) return;
+    setState(() { _isSaving = true; });
+    try {
+      await FirebaseFirestore.instance.collection('todos').doc(widget.todoId).delete();
+      widget.onTodoAdded();
+      if (!mounted) return;
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('🗑️ 任務已成功刪除！')));
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('刪除失敗: $e')));
+    } finally {
+      if (mounted) setState(() { _isSaving = false; });
+    }
+  }
+
+  Future<void> _saveOrUpdateTodo() async {
+    if (_titleController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('任務名稱不能留空喔！')));
+      return;
+    }
+
+    if (_endDateTime.isBefore(_startDateTime) || _endDateTime.isAtSameMomentAs(_startDateTime)) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('結束時間必須晚於開始時間喔！')));
+      return;
+    }
+
+    setState(() { _isSaving = true; });
+
+    final Map<String, dynamic> todoData = {
+      'title': _titleController.text.trim(),
+      'color': _selectedColorValue,
+      'startTime': _startDateTime.toIso8601String(), 
+      'endTime': _endDateTime.toIso8601String(),
+      'reminderSetting': _reminderSetting,
+      'repeatSetting': _repeatSetting,
+      'groupId': _selectedGroupId,
+      'ownerUid': _currentUser?.uid, 
+      'note': _noteController.text.trim(),
+    };
+
+    try {
+      if (_isEditMode) {
+        await FirebaseFirestore.instance.collection('todos').doc(widget.todoId).update(todoData);
+      } else {
+        todoData['createdAt'] = FieldValue.serverTimestamp();
+        await FirebaseFirestore.instance.collection('todos').add(todoData);
+      }
+      widget.onTodoAdded(); 
+      if (!mounted) return;
+      Navigator.pop(context); 
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('資料庫處理失敗: $e')));
+    } finally {
+      if (mounted) setState(() { _isSaving = false; });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        top: 24, left: 24, right: 24,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 24, 
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  _isEditMode ? '⚙️ 編輯任務項目' : '建立新任務', 
+                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)
+                ),
+                if (_isEditMode)
+                  IconButton(
+                    icon: const Icon(Icons.delete_forever_rounded, color: Colors.red, size: 28),
+                    onPressed: _deleteTodo,
+                  ),
+              ],
+            ),
+            const SizedBox(height: 20),
+
+            TextField(
+              controller: _titleController,
+              decoration: const InputDecoration(
+                labelText: '任務名稱',
+                prefixIcon: Icon(Icons.assignment_rounded),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            const Text('選擇代表顏色', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            SizedBox(
+              height: 36,
+              child: ListView.builder(
+                scrollDirection: Axis.horizontal,
+                itemCount: _colorOptions.length,
+                itemBuilder: (context, index) {
+                  final colorVal = _colorOptions[index];
+                  final isSelected = _selectedColorValue == colorVal;
+                  return GestureDetector(
+                    onTap: () => setState(() => _selectedColorValue = colorVal),
+                    child: Container(
+                      margin: const EdgeInsets.only(right: 12),
+                      width: 36,
+                      decoration: BoxDecoration(
+                        color: Color(colorVal),
+                        shape: BoxShape.circle,
+                        border: isSelected ? Border.all(color: const Color(0xFF203764), width: 3) : null,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            // 🎯 開始日期與時間（滾輪）
+            _buildDateTimePickerSection(
+              label: '📅 開始日期與時間',
+              currentDateTime: _startDateTime,
+              onDateTimeChanged: (newDateTime) {
+                setState(() {
+                  _startDateTime = newDateTime;
+                  // 防呆校正：若結束時間比開始時間早，自動往後延一小時
+                  if (_endDateTime.isBefore(_startDateTime)) {
+                    _endDateTime = _startDateTime.add(const Duration(hours: 1));
+                  }
+                });
+              },
+            ),
+            const SizedBox(height: 12),
+
+            // 🎯 結束日期與時間（滾輪）
+            _buildDateTimePickerSection(
+              label: '⏳ 結束日期與時間',
+              currentDateTime: _endDateTime,
+              onDateTimeChanged: (newDateTime) {
+                setState(() {
+                  _endDateTime = newDateTime;
+                });
+              },
+            ),
+            const SizedBox(height: 16),
+
+            Row(
+              children: [
+                Expanded(
+                  child: DropdownButtonFormField<String>(
+                    value: _reminderSetting,
+                    decoration: const InputDecoration(labelText: '提醒我'),
+                    items: _reminderOptions.map((opt) => DropdownMenuItem(value: opt, child: Text(opt, style: const TextStyle(fontSize: 14)))).toList(),
+                    onChanged: (val) => setState(() => _reminderSetting = val ?? "開始時間點"),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: DropdownButtonFormField<String>(
+                    value: _repeatSetting,
+                    decoration: const InputDecoration(labelText: '重複'),
+                    items: _repeatOptions.map((opt) => DropdownMenuItem(value: opt, child: Text(opt, style: const TextStyle(fontSize: 14)))).toList(),
+                    onChanged: (val) => setState(() => _repeatSetting = val ?? "不要"),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+
+            DropdownButtonFormField<String>(
+              value: _selectedGroupId,
+              decoration: const InputDecoration(labelText: '指派給哪個組別'),
+              items: widget.groupTabs.where((t) => t['id'] != 'all').map((t) {
+                return DropdownMenuItem(
+                  value: t['id'],
+                  child: Text(t['name'] == 'personal' ? '個人（不公開）' : t['name']!),
+                );
+              }).toList(),
+              onChanged: (val) => setState(() => _selectedGroupId = val ?? "personal"),
+            ),
+            const SizedBox(height: 16),
+
+            TextField(
+              controller: _noteController,
+              decoration: const InputDecoration(labelText: '備註（選填）'),
+            ),
+            const SizedBox(height: 32),
+
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                minimumSize: const Size.fromHeight(52),
+              ),
+              onPressed: _isSaving ? null : _saveOrUpdateTodo,
+              child: _isSaving 
+                ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                : Text(_isEditMode ? '確認修改任務' : '確認新增任務', style: const TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
