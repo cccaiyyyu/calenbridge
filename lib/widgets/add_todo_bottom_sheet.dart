@@ -2,12 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+// 🎯 統一使用純小寫，與 pubspec.yaml 完全一致！
+import 'package:calenbridge/services/google_calendar_service.dart';
+
 class AddTodoBottomSheet extends StatefulWidget {
   final String currentSelectedTab;
   final List<Map<String, String>> groupTabs;
   final VoidCallback onTodoAdded; 
 
-  // 編輯模式專用
   final String? todoId;
   final Map<String, dynamic>? initialData;
 
@@ -39,7 +41,8 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
   bool _isSaving = false;
 
   final List<int> _colorOptions = [0xFF203764, 0xFFE53935, 0xFF43A047, 0xFFFB8C00, 0xFF8E24AA, 0xFF00ACC1];
-  final List<String> _reminderOptions = ["開始時間點", "10分鐘前", "一小時前", "一天前", "自訂"];
+  
+  final List<String> _reminderOptions = ["不提醒", "開始時間點", "10分鐘前", "一小時前", "一天前", "自訂"];
   final List<String> _repeatOptions = ["不要", "每天", "每週", "每個月", "每年"];
 
   bool get _isEditMode => widget.todoId != null; 
@@ -55,14 +58,15 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
       _selectedColorValue = data['color'] ?? 0xFF203764;
       _startDateTime = DateTime.parse(data['startTime'] ?? DateTime.now().toIso8601String());
       _endDateTime = DateTime.parse(data['endTime'] ?? DateTime.now().add(const Duration(hours: 1)).toIso8601String());
-      _reminderSetting = data['reminderSetting'] ?? "開始時間點";
+      _reminderSetting = data['reminderSetting'] ?? "不提醒"; 
       _repeatSetting = data['repeatSetting'] ?? "不要";
       _selectedGroupId = data['groupId'] ?? "personal";
     } else {
       _selectedColorValue = 0xFF203764; 
       _startDateTime = DateTime.now().add(const Duration(minutes: 30));
       _endDateTime = DateTime.now().add(const Duration(hours: 1, minutes: 30));
-      _reminderSetting = "開始時間點";
+      
+      _reminderSetting = "不提醒"; 
       _repeatSetting = "不要";
       _selectedGroupId = "personal";
 
@@ -83,7 +87,6 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
     super.dispose();
   }
 
-  // 🎯 核心滾輪渲染元件：打造上下滑動的 3D 滾輪
   Widget _buildTimeWheel({
     required int itemCount,
     required int selectedValue,
@@ -119,7 +122,6 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
     );
   }
 
-  // 🎯 封裝重複的時間選擇 UI 區塊（包含日期點擊按鈕與時間滾輪）
   Widget _buildDateTimePickerSection({
     required String label,
     required DateTime currentDateTime,
@@ -134,7 +136,6 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
       ),
       child: Row(
         children: [
-          // 左側：日期選擇按鈕
           Expanded(
             child: InkWell(
               onTap: () async {
@@ -168,10 +169,7 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
               ),
             ),
           ),
-          
           const VerticalDivider(width: 20, thickness: 1),
-
-          // 右側：24小時制時間滾輪
           Row(
             children: [
               _buildTimeWheel(
@@ -179,11 +177,8 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
                 selectedValue: currentDateTime.hour,
                 onSelectedItemChanged: (h) {
                   onDateTimeChanged(DateTime(
-                    currentDateTime.year,
-                    currentDateTime.month,
-                    currentDateTime.day,
-                    h,
-                    currentDateTime.minute,
+                    currentDateTime.year, currentDateTime.month, currentDateTime.day,
+                    h, currentDateTime.minute,
                   ));
                 },
               ),
@@ -193,11 +188,8 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
                 selectedValue: currentDateTime.minute,
                 onSelectedItemChanged: (m) {
                   onDateTimeChanged(DateTime(
-                    currentDateTime.year,
-                    currentDateTime.month,
-                    currentDateTime.day,
-                    currentDateTime.hour,
-                    m,
+                    currentDateTime.year, currentDateTime.month, currentDateTime.day,
+                    currentDateTime.hour, m,
                   ));
                 },
               ),
@@ -256,6 +248,19 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
         todoData['createdAt'] = FieldValue.serverTimestamp();
         await FirebaseFirestore.instance.collection('todos').add(todoData);
       }
+
+      try {
+        print("【CalenBridge 聯動】正在連動至真實 Google Calendar API...");
+        await GoogleCalendarService().insertEventToGoogleCalendar(
+          title: _titleController.text.trim(),
+          startTime: _startDateTime,
+          endTime: _endDateTime,
+          note: _noteController.text.trim(),
+        );
+      } catch (googleError) {
+        print("【CalenBridge 提醒】Google 日曆背景同步略過或衝突: $googleError");
+      }
+
       widget.onTodoAdded(); 
       if (!mounted) return;
       Navigator.pop(context); 
@@ -330,14 +335,12 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
             ),
             const SizedBox(height: 20),
 
-            // 🎯 開始日期與時間（滾輪）
             _buildDateTimePickerSection(
               label: '📅 開始日期與時間',
               currentDateTime: _startDateTime,
               onDateTimeChanged: (newDateTime) {
                 setState(() {
                   _startDateTime = newDateTime;
-                  // 防呆校正：若結束時間比開始時間早，自動往後延一小時
                   if (_endDateTime.isBefore(_startDateTime)) {
                     _endDateTime = _startDateTime.add(const Duration(hours: 1));
                   }
@@ -346,7 +349,6 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
             ),
             const SizedBox(height: 12),
 
-            // 🎯 結束日期與時間（滾輪）
             _buildDateTimePickerSection(
               label: '⏳ 結束日期與時間',
               currentDateTime: _endDateTime,
@@ -365,7 +367,7 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
                     value: _reminderSetting,
                     decoration: const InputDecoration(labelText: '提醒我'),
                     items: _reminderOptions.map((opt) => DropdownMenuItem(value: opt, child: Text(opt, style: const TextStyle(fontSize: 14)))).toList(),
-                    onChanged: (val) => setState(() => _reminderSetting = val ?? "開始時間點"),
+                    onChanged: (val) => setState(() => _reminderSetting = val ?? "不提醒"),
                   ),
                 ),
                 const SizedBox(width: 16),
@@ -402,12 +404,14 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
 
             ElevatedButton(
               style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF203764),
                 minimumSize: const Size.fromHeight(52),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
               onPressed: _isSaving ? null : _saveOrUpdateTodo,
               child: _isSaving 
                 ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                : Text(_isEditMode ? '確認修改任務' : '確認新增任務', style: const TextStyle(fontWeight: FontWeight.bold)),
+                : Text(_isEditMode ? '確認' : '確認', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
             ),
           ],
         ),

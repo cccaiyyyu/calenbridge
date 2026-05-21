@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
-import 'login_screen.dart';
-import '../widgets/add_todo_bottom_sheet.dart';
+// 🎯 統一使用純小寫，與 pubspec.yaml 完全一致！
+import 'package:calenbridge/screens/login_screen.dart';
+import 'package:calenbridge/widgets/add_todo_bottom_sheet.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -75,7 +76,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // 🎯 核心優化 1：這裡「完全不要加上 orderBy」，避免引發 Firebase 複合索引崩潰阻擋
   Query _buildTodoQuery() {
     Query query = FirebaseFirestore.instance
         .collection('todos')
@@ -210,18 +210,12 @@ class _HomeScreenState extends State<HomeScreen> {
                             return const Center(child: Text('目前沒有待辦事項喔！', style: TextStyle(color: Colors.grey)));
                           }
 
-                          // 🎯 核心優化 2：直接在前端使用 Dart 對快取資料進行無痛時間排序！
-                          // 複製一份資料列表
                           List<QueryDocumentSnapshot> todos = List.from(snapshot.data!.docs);
-                          
-                          // 依照 endTime 進行由近到遠的「升冪排序」
                           todos.sort((a, b) {
                             final Map<String, dynamic> dataA = a.data() as Map<String, dynamic>;
                             final Map<String, dynamic> dataB = b.data() as Map<String, dynamic>;
-                            
                             final String timeA = dataA['endTime'] ?? '';
                             final String timeB = dataB['endTime'] ?? '';
-                            
                             return timeA.compareTo(timeB); 
                           });
 
