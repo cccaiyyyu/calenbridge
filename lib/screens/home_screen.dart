@@ -1,10 +1,10 @@
+import 'package:calenbridge/screens/calendar_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-
-// 🎯 統一使用純小寫，與 pubspec.yaml 完全一致！
 import 'package:calenbridge/screens/login_screen.dart';
 import 'package:calenbridge/widgets/add_todo_bottom_sheet.dart';
+
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -35,7 +35,7 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       DocumentSnapshot userDoc = await FirebaseFirestore.instance
           .collection('users')
-          .doc(_currentUser!.uid)
+          .doc(_currentUser.uid)
           .get();
 
       if (userDoc.exists && userDoc.data() != null) {
@@ -105,7 +105,7 @@ class _HomeScreenState extends State<HomeScreen> {
         return AddTodoBottomSheet(
           currentSelectedTab: _selectedTab,
           groupTabs: _groupTabs,
-          todoId: todoId,                 
+          todoId: todoId,                
           initialData: initialData,       
           onTodoAdded: () {
             setState(() {}); 
@@ -118,7 +118,8 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _handleSignOut() async {
     await FirebaseAuth.instance.signOut();
     if (!mounted) return;
-    Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const LoginScreen()));
+    // 🎯 解除魔咒 1：拿掉 const LoginScreen() 的 const
+    Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => LoginScreen()));
   }
 
   String _formatDateTimeString(String? isoString) {
@@ -145,15 +146,25 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       body: Row(
         children: [
+          // 🗂️ 1. 側邊導覽列
           NavigationRail(
             selectedIndex: 0,
             onDestinationSelected: (int index) {
-              if (index == 1) _handleSignOut(); 
+              if (index == 1) {
+                // 🎯 解除魔咒 2：拿掉 const CalendarScreen() 的 const
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => CalendarScreen()),
+                );
+              } else if (index == 2) {
+                _handleSignOut(); 
+              }
             },
             labelType: NavigationRailLabelType.none,
             destinations: const [
               NavigationRailDestination(icon: Icon(Icons.home_rounded), label: Text('首頁')),
-              NavigationRailDestination(icon: Icon(Icons.settings_rounded), label: Text('設定')),
+              NavigationRailDestination(icon: Icon(Icons.calendar_month_rounded), label: Text('行事曆')),
+              NavigationRailDestination(icon: Icon(Icons.settings_rounded), label: Text('首頁')),
             ],
             leading: const Padding(
               padding: EdgeInsets.symmetric(vertical: 24.0),

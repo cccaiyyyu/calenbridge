@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-
-// 🎯 統一使用純小寫，與 pubspec.yaml 完全一致！
 import 'package:calenbridge/services/google_calendar_service.dart';
 
 class AddTodoBottomSheet extends StatefulWidget {
@@ -41,7 +39,6 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
   bool _isSaving = false;
 
   final List<int> _colorOptions = [0xFF203764, 0xFFE53935, 0xFF43A047, 0xFFFB8C00, 0xFF8E24AA, 0xFF00ACC1];
-  
   final List<String> _reminderOptions = ["不提醒", "開始時間點", "10分鐘前", "一小時前", "一天前", "自訂"];
   final List<String> _repeatOptions = ["不要", "每天", "每週", "每個月", "每年"];
 
@@ -204,11 +201,19 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
     if (!_isEditMode) return;
     setState(() { _isSaving = true; });
     try {
+      final String? googleEventId = widget.initialData?['googleEventId'];
+      if (googleEventId != null && googleEventId.isNotEmpty) {
+        try {
+          await GoogleCalendarService().deleteEventFromGoogleCalendar(googleEventId);
+        } catch (googleError) {
+          print("【CalenBridge 提醒】Google 日曆刪除同步略過: $googleError");
+        }
+      }
+
       await FirebaseFirestore.instance.collection('todos').doc(widget.todoId).delete();
       widget.onTodoAdded();
       if (!mounted) return;
       Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('🗑️ 任務已成功刪除！')));
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('刪除失敗: $e')));
     } finally {
@@ -229,6 +234,7 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
 
     setState(() { _isSaving = true; });
 
+    // 1. 準備寫入 Firestore 的任務本體資料
     final Map<String, dynamic> todoData = {
       'title': _titleController.text.trim(),
       'color': _selectedColorValue,
@@ -242,23 +248,75 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
     };
 
     try {
-      if (_isEditMode) {
-        await FirebaseFirestore.instance.collection('todos').doc(widget.todoId).update(todoData);
-      } else {
-        todoData['createdAt'] = FieldValue.serverTimestamp();
-        await FirebaseFirestore.instance.collection('todos').add(todoData);
+      // 🎯 核心優化：線上獲取使用者在註冊時設定的個人檔案同步偏好
+      bool syncCalendarSettings = true; // 預設為 true (要一樣)
+      if (_currentUser != null) {
+        DocumentSnapshot userDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(_currentUser!.uid)
+            .get();
+        if (userDoc.exists && userDoc.data() != null) {
+          final userData = userDoc.data() as Map<String, dynamic>;
+          // 💡 請確保你們註冊頁面存入的欄位名稱叫作 'syncCalendarSettings' (型態為 bool)
+          syncCalendarSettings = userData['syncCalendarSettings'] ?? true;
+        }
       }
 
-      try {
-        print("【CalenBridge 聯動】正在連動至真實 Google Calendar API...");
-        await GoogleCalendarService().insertEventToGoogleCalendar(
-          title: _titleController.text.trim(),
-          startTime: _startDateTime,
-          endTime: _endDateTime,
-          note: _noteController.text.trim(),
-        );
-      } catch (googleError) {
-        print("【CalenBridge 提醒】Google 日曆背景同步略過或衝突: $googleError");
+      // 🎯 核心優化：偏好規則分流計算
+      String finalGoogleReminder = "不提醒";
+      String finalGoogleRepeat = "不要";
+
+      if (syncCalendarSettings) {
+        // 要一樣：完美複製 App 畫面上的參數
+        finalGoogleReminder = _reminderSetting;
+        finalGoogleRepeat = _repeatSetting;
+      } else {
+        // 不要一樣：無視 App 的選擇，強制預設為不提醒、不重複
+        print("【CalenBridge 偏好】使用者設定不同步參數，日曆將預設為不提醒與不重複。");
+      }
+
+      if (!_isEditMode) {
+        // 新增模式
+        try {
+          print("【CalenBridge 聯動】正在連動建立 Google 行事曆事件...");
+          final String? googleId = await GoogleCalendarService().insertEventToGoogleCalendar(
+            title: _titleController.text.trim(),
+            startTime: _startDateTime,
+            endTime: _endDateTime,
+            reminderSetting: finalGoogleReminder, // 👈 帶入分流後的參數
+            repeatSetting: finalGoogleRepeat,     // 👈 帶入分流後的參數
+            note: _noteController.text.trim(),
+          );
+          if (googleId != null) {
+            todoData['googleEventId'] = googleId;
+          }
+        } catch (googleError) {
+          print("【CalenBridge 提醒】Google 日曆背景建立同步略過: $googleError");
+        }
+
+        todoData['createdAt'] = FieldValue.serverTimestamp();
+        await FirebaseFirestore.instance.collection('todos').add(todoData);
+      } else {
+        // 修改模式
+        await FirebaseFirestore.instance.collection('todos').doc(widget.todoId).update(todoData);
+
+        final String? googleEventId = widget.initialData?['googleEventId'];
+        if (googleEventId != null && googleEventId.isNotEmpty) {
+          try {
+            print("【CalenBridge 聯動】正在連動修改 Google 行事曆事件...");
+            await GoogleCalendarService().updateEventInGoogleCalendar(
+              googleEventId: googleEventId,
+              title: _titleController.text.trim(),
+              startTime: _startDateTime,
+              endTime: _endDateTime,
+              reminderSetting: finalGoogleReminder, // 👈 帶入分流後的參數
+              repeatSetting: finalGoogleRepeat,     // 👈 帶入分流後的參數
+              note: _noteController.text.trim(),
+            );
+          } catch (googleError) {
+            print("【CalenBridge 提醒】Google 日曆修改同步失敗: $googleError");
+          }
+        }
       }
 
       widget.onTodoAdded(); 
@@ -411,7 +469,7 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
               onPressed: _isSaving ? null : _saveOrUpdateTodo,
               child: _isSaving 
                 ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                : Text(_isEditMode ? '確認' : '確認', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                : Text(_isEditMode ? '確認修改任務' : '確認新增任務', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
             ),
           ],
         ),
