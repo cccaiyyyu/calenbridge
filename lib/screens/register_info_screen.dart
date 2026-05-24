@@ -28,14 +28,14 @@ class _RegisterInfoScreenState extends State<RegisterInfoScreen> {
     Icons.bolt_rounded,
   ];
   
-  // 🎯 控制頭像選擇的變數
-  int _selectedAvatarIndex = 0; // 0~5 代表內建頭像，-1 代表使用自訂上傳照片
-  XFile? _pickedImage;          // 儲存選取的圖片檔案
-  Uint8List? _webImage;         // 專門用於 Web 端預覽圖片的 Byte 資料
+
 
   // 2. 通知頻率設定（小時）
   int _notificationHours = 2; 
   final List<int> _hoursOptions = [1, 2, 4, 6, 8, 12, 24];
+  int _selectedAvatarIndex = 0;
+  XFile? _pickedImage;
+  Uint8List? _webImage;
 
   bool _isLoading = false;
 
