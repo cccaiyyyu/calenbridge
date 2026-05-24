@@ -42,6 +42,7 @@ dependencies:
   image_picker: ^1.0.7
   googleapis: ^13.1.0
   http: ^1.2.1
+  table_calendar: ^3.2.0
 
 
 dev_dependencies:

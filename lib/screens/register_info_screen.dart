@@ -45,14 +45,14 @@ class _RegisterInfoScreenState extends State<RegisterInfoScreen> {
     super.dispose();
   }
 
-  // 🎯 觸發相簿選取自訂圖片（加上嚴格尺寸限制）
+  // 觸發相簿選取自訂圖片
   Future<void> _pickImage() async {
     final ImagePicker picker = ImagePicker();
     final XFile? image = await picker.pickImage(
       source: ImageSource.gallery,
-      maxWidth: 250,      // 🎯 強制將圖片最大寬度限制為 250 像素（大頭貼不需要特大圖）
-      maxHeight: 250,     // 🎯 強制將圖片最大高度限制為 250 像素
-      imageQuality: 50,   // 🎯 壓縮品質設為 50%，大幅減少檔案體積
+      maxWidth: 250,      
+      maxHeight: 250,     
+      imageQuality: 50,   
     );
 
     if (image != null) {
@@ -60,12 +60,12 @@ class _RegisterInfoScreenState extends State<RegisterInfoScreen> {
       setState(() {
         _webImage = bytes;
         _pickedImage = image;
-        _selectedAvatarIndex = -1; // 切換為自訂頭像狀態
+        _selectedAvatarIndex = -1; 
       });
     }
   }
 
-  // 🎯 核心後端寫入邏輯
+  // 核心後端寫入邏輯
   Future<void> _saveProfileToFirestore() async {
     if (!_formKey.currentState!.validate()) return;
 
@@ -82,7 +82,6 @@ class _RegisterInfoScreenState extends State<RegisterInfoScreen> {
           Uint8List bytes = _webImage ?? await _pickedImage!.readAsBytes();
           avatarData = "data:image/jpeg;base64,${base64Encode(bytes)}";
           
-          // 🛑 最終防線：如果使用者上傳的文件依然超過 1MB 的極限
           if (avatarData.length > 1000000) {
             throw Exception("圖片檔案太大了，即使壓縮後仍超過資料庫限制，請更換其他照片。");
           }
@@ -99,6 +98,7 @@ class _RegisterInfoScreenState extends State<RegisterInfoScreen> {
           'nickname': _nicknameController.text.trim(),
           'avatarUrl': avatarData, 
           'notificationFrequencyHours': _notificationHours,
+          'syncCalendarSettings': _syncCalendarSettings, // 🎯 關鍵：將使用者的偏好寫入資料庫
           'createdAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
 
@@ -110,7 +110,6 @@ class _RegisterInfoScreenState extends State<RegisterInfoScreen> {
           const SnackBar(content: Text('個人偏好設定儲存成功！')),
         );
 
-        // 成功後跳轉到首頁
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (context) => const HomeScreen()),
@@ -120,7 +119,6 @@ class _RegisterInfoScreenState extends State<RegisterInfoScreen> {
       print("【CalenBridge】Firestore 寫入異常: $e");
       if (!mounted) return;
       
-      // 🎯 優化錯誤訊息提示，如果是特定的容量報錯，換成看得懂的中文
       String errorMsg = e.toString();
       if (errorMsg.contains("longer than 1048487 bytes")) {
         errorMsg = "照片檔案太大（超過1MB限制），請嘗試更換其他照片或裁剪後上傳！";
@@ -148,7 +146,7 @@ class _RegisterInfoScreenState extends State<RegisterInfoScreen> {
         child: _isLoading 
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(
-              padding: const EdgeInsets.all(60.0),
+              padding: const EdgeInsets.all(40.0), // 稍微縮小 padding 讓畫面能放得下新選項
               child: Form(
                 key: _formKey,
                 child: Column(
@@ -157,14 +155,12 @@ class _RegisterInfoScreenState extends State<RegisterInfoScreen> {
                     const Text('選擇系統頭像或自行上傳', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 12),
                     
-                    // 🪐 頭像選擇橫向列表
                     SizedBox(
                       height: 70,
                       child: ListView.builder(
                         scrollDirection: Axis.horizontal,
                         itemCount: _avatars.length + 1, 
                         itemBuilder: (context, index) {
-                          // 📸 自訂上傳相片按鈕
                           if (index == _avatars.length) {
                             final isCustomSelected = _selectedAvatarIndex == -1;
                             return GestureDetector(
@@ -193,7 +189,6 @@ class _RegisterInfoScreenState extends State<RegisterInfoScreen> {
                             );
                           }
 
-                          // 🤖 內建系統 Icon 按鈕
                           final isSelected = _selectedAvatarIndex == index;
                           return GestureDetector(
                             onTap: () => setState(() => _selectedAvatarIndex = index),
@@ -236,17 +231,48 @@ class _RegisterInfoScreenState extends State<RegisterInfoScreen> {
                       items: _hoursOptions.map((h) => DropdownMenuItem(value: h, child: Text('每隔 $h 小時傳送一次通知'))).toList(),
                       onChanged: (val) => setState(() => _notificationHours = val ?? 2),
                     ),
-                    const SizedBox(height: 50),
+                    const SizedBox(height: 30),
+
+                    // 🎯 新增：Google 行事曆同步偏好設定 UI
+                    const Text('行事曆同步設定', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade50,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.grey.shade300),
+                      ),
+                      child: SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text(
+                          '完整保留提醒與重複設定', 
+                          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)
+                        ),
+                        subtitle: const Text(
+                          '開啟：完美複製 App 內的提醒與重複規則。\n關閉：寫入 Google 的任務一律預設為「不提醒、不重複」。', 
+                          style: TextStyle(fontSize: 12, color: Colors.grey, height: 1.4)
+                        ),
+                        value: _syncCalendarSettings,
+                        activeColor: const Color(0xFF203764),
+                        onChanged: (bool value) {
+                          setState(() {
+                            _syncCalendarSettings = value; // 更新偏好狀態
+                          });
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 40),
                     
                     ElevatedButton(
                       onPressed: _saveProfileToFirestore,
                       style: ElevatedButton.styleFrom(
                         minimumSize: const Size.fromHeight(52), 
+                        backgroundColor: const Color(0xFF203764), // 確保按鈕有顏色
                       ),
-                      // 🎯 這裡將文字樣式明確設定為粗體 (FontWeight.bold)
                       child: const Text(
                         '完成設定！', 
-                        style: TextStyle(fontWeight: FontWeight.bold),
+                        style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
                       ),
                     ),
                   ],
