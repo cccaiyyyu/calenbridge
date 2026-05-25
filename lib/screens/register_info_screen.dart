@@ -15,6 +15,7 @@ class RegisterInfoScreen extends StatefulWidget {
 }
 
 class _RegisterInfoScreenState extends State<RegisterInfoScreen> {
+  bool _syncCalendarSettings = false;
   final TextEditingController _nicknameController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
   
