@@ -15,6 +15,7 @@ class RegisterInfoScreen extends StatefulWidget {
 }
 
 class _RegisterInfoScreenState extends State<RegisterInfoScreen> {
+  bool _syncCalendarSettings = false;
   final TextEditingController _nicknameController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
   
@@ -37,7 +38,6 @@ class _RegisterInfoScreenState extends State<RegisterInfoScreen> {
   XFile? _pickedImage;
   Uint8List? _webImage;
 
-  bool _syncCalendarSettings = true;
   bool _isLoading = false;
 
   @override
