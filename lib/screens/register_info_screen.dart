@@ -37,6 +37,7 @@ class _RegisterInfoScreenState extends State<RegisterInfoScreen> {
   XFile? _pickedImage;
   Uint8List? _webImage;
 
+  bool _syncCalendarSettings = true;
   bool _isLoading = false;
 
   @override
