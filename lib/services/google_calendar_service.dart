@@ -5,7 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';    
 
 class GoogleCalendarService {
-  // 🎯 復活：v6 世代最穩定的全域認證實體
+  // 🎯 v6 世代最穩定的全域認證實體
   static final GoogleSignIn _googleSignIn = GoogleSignIn(
     clientId: '105456248073-7p478blrecon0e5v5b78sh6dfphb1obs.apps.googleusercontent.com',
     scopes: [calendar.CalendarApi.calendarScope],
@@ -89,14 +89,12 @@ class GoogleCalendarService {
       var account = await _getSignedInAccount();
       if (account == null) return null;
 
-      // v6 經典相容權限驗證
       bool isAuthorized = await _googleSignIn.canAccessScopes([calendar.CalendarApi.calendarScope]);
       if (!isAuthorized) {
         isAuthorized = await _googleSignIn.requestScopes([calendar.CalendarApi.calendarScope]);
         if (!isAuthorized) return null;
       }
 
-      // 🎯 復活：從 authHeaders 中順暢抽取傳輸密鑰
       final Map<String, String> authHeaders = await account.authHeaders;
       final String? authHeaderValue = authHeaders['Authorization'];
       if (authHeaderValue == null || !authHeaderValue.startsWith('Bearer ')) return null;
@@ -108,7 +106,6 @@ class GoogleCalendarService {
       final bool isSyncEnabled = await _getUserSyncPreference();
       print("【CalenBridge API】目前真實同步開關狀態為: $isSyncEnabled");
 
-      // 打包標準 Google Event 物件
       final calendar.Event event = calendar.Event()
         ..summary = title 
         ..description = note ?? '透過 CalenBridge 智慧系統建立' 
@@ -192,8 +189,107 @@ class GoogleCalendarService {
       rethrow;
     }
   }
+
+  /// 🎯 功能 5：反向抓取 Google 行事曆行程並寫入 Firestore（自動防重複）
+/// 🎯 功能 5：智慧反向同步 - 抓取「今天起兩週內」行程，按時間排序，並回傳待勾選清單（不自動寫入）
+  Future<List<Map<String, dynamic>>> fetchTwoWeeksGoogleEvents() async {
+    try {
+      print("【CalenBridge 同步】發動反向抓取，準備建立 Google 通訊端...");
+      
+      // 1. 確保帳號已授權登入
+      var account = await _getSignedInAccount();
+      if (account == null) throw Exception("無法取得 Google 帳號，請重新登入！");
+
+      // 🛡️ 權限驗證
+      bool isAuthorized = await _googleSignIn.canAccessScopes([calendar.CalendarApi.calendarScope]);
+      if (!isAuthorized) {
+        isAuthorized = await _googleSignIn.requestScopes([calendar.CalendarApi.calendarScope]);
+        if (!isAuthorized) throw Exception("您拒絕了行事曆授權，系統無法抓取行程喔！");
+      }
+
+      final Map<String, String> authHeaders = await account.authHeaders;
+      final String? authHeaderValue = authHeaders['Authorization'];
+      if (authHeaderValue == null || !authHeaderValue.startsWith('Bearer ')) {
+        throw Exception("無法取得有效的 Google 授權憑證");
+      }
+      final String accessToken = authHeaderValue.substring(7);
+
+      final authenticatedHttpClient = _TokenAuthClient(accessToken, http.Client());
+      final calendarApi = calendar.CalendarApi(authenticatedHttpClient);
+
+      // 📅 完美對齊規格：抓取「今天 00:00」到「未來 14 天後 23:59」的行程
+      final now = DateTime.now();
+      final todayStart = DateTime(now.year, now.month, now.day, 0, 0, 0).toUtc();
+      final twoWeeksEnd = DateTime(now.year, now.month, now.day, 23, 59, 59).add(const Duration(days: 14)).toUtc();
+
+      print("【CalenBridge 同步】正在撈取 Google 雲端行程清單 (範圍: ${todayStart.toLocal()} ~ ${twoWeeksEnd.toLocal()})...");
+      final calendar.Events events = await calendarApi.events.list(
+        'primary',
+        timeMin: todayStart,
+        timeMax: twoWeeksEnd,
+        singleEvents: true, // 自動拆解重複性行程
+      );
+
+      List<Map<String, dynamic>> googleTodoDataList = [];
+      final String? uid = FirebaseAuth.instance.currentUser?.uid;
+
+      if (events.items != null && uid != null) {
+        for (var event in events.items!) {
+          if (event.id == null) continue;
+
+          // 🔒 關鍵防禦：依然先去 Firestore 檢查這個行程是不是以前「已經導入過」了？
+          final duplicateCheck = await FirebaseFirestore.instance
+              .collection('todos')
+              .where('ownerUid', isEqualTo: uid)
+              .where('googleEventId', isEqualTo: event.id)
+              .get();
+
+          // 如果已經存在的行程，我們就不重複顯示在勾選清單中，避免重複導入
+          if (duplicateCheck.docs.isEmpty) {
+            // 解析時間 (防呆：若是全天事件可能沒有 dateTime，改拿 date)
+            DateTime startDateTime = event.start?.dateTime ?? event.start?.date ?? DateTime.now();
+            DateTime endDateTime = event.end?.dateTime ?? event.end?.date ?? startDateTime.add(const Duration(hours: 1));
+
+            // 轉回 local 時間確保格式與你系統新增行程時一模一樣
+            String startTimeIso = startDateTime.toLocal().toIso8601String();
+            String endTimeIso = endDateTime.toLocal().toIso8601String();
+
+            // 建立標準的 Todo 資料架構（包含截止日期，此處截止日對齊行事曆的結束時間點）
+            googleTodoDataList.add({
+              'googleEventId': event.id,
+              'title': event.summary ?? '未命名 Google 行程',
+              'startTime': startTimeIso,
+              'endTime': endTimeIso,
+              'deadline': endTimeIso, // 🎯 解決問題三：精準對齊截止日期參數
+              'color': 0xFF203764, 
+              'reminderSetting': "開始時間點",
+              'repeatSetting': "不要",
+              'groupId': "personal", 
+              'ownerUid': uid,
+              'note': event.description ?? '自 Google 行事曆一鍵同步拉回',
+              'isCompleted': false, // 預設為未完成的待辦事項
+            });
+          }
+        }
+
+        // 🎯 解決問題一：在回傳前，依據 startTime 由近到遠（由早到晚）進行排序！
+        googleTodoDataList.sort((a, b) {
+          DateTime timeA = DateTime.parse(a['startTime']);
+          DateTime timeB = DateTime.parse(b['startTime']);
+          return timeA.compareTo(timeB); // 早的排在前面
+        });
+      }
+
+      print("【CalenBridge 同步】成功抓取並排序了 ${googleTodoDataList.length} 筆潛在同步行程。");
+      return googleTodoDataList;
+    } catch (e) {
+      print("【CalenBridge 同步大爆炸】抓取失敗: $e");
+      rethrow;
+    }
+  }
 }
 
+// 🎯 確保最底下這個自訂通訊端類別完整存在，紅線才會消失！
 class _TokenAuthClient extends http.BaseClient {
   final String _accessToken;
   final http.Client _innerClient;
