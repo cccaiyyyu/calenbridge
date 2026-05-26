@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -52,11 +53,10 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
   @override
   void initState() {
     super.initState();
-    // 在 initState() 最後加
     if (_isEditMode && widget.initialData != null) {
-     _assignedToUid = widget.initialData!['assignedToUid'];
-     _assignedToEmail = widget.initialData!['assignedToEmail'];
-      }
+      _assignedToUid = widget.initialData!['assignedToUid'];
+      _assignedToEmail = widget.initialData!['assignedToEmail'];
+    }
     _loadGroupMembersAndPermission();
     
     if (_isEditMode && widget.initialData != null) {
@@ -86,7 +86,6 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
         _selectedGroupId = currentTab['id']!;
       }
     }
-    
   }
   
   @override
@@ -95,41 +94,43 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
     _noteController.dispose();
     super.dispose();
   }
+
   Future<void> _loadGroupMembersAndPermission() async {
-  if (_selectedGroupId == 'personal') return;
+    if (_selectedGroupId == 'personal') return;
 
-  final db = FirebaseFirestore.instance;
+    final db = FirebaseFirestore.instance;
 
-  // 取得小組資料
-  final groupDoc = await db.collection('groups').doc(_selectedGroupId).get();
-  if (!groupDoc.exists) return;
-  final groupData = groupDoc.data() as Map<String, dynamic>;
+    // 取得小組資料
+    final groupDoc = await db.collection('groups').doc(_selectedGroupId).get();
+    if (!groupDoc.exists) return;
+    final groupData = groupDoc.data() as Map<String, dynamic>;
 
-  // 判斷當前使用者是否有指派權限
-  final permissions = groupData['memberPermissions'] as Map<String, dynamic>? ?? {};
-  final myPerm = permissions[_currentUser?.uid] as Map<String, dynamic>? ?? {};
-  final canAssign = myPerm['canAssignTask'] ?? false;
-  final isCreator = groupData['creatorUid'] == _currentUser?.uid;
+    // 判斷當前使用者是否有指派權限
+    final permissions = groupData['memberPermissions'] as Map<String, dynamic>? ?? {};
+    final myPerm = permissions[_currentUser?.uid] as Map<String, dynamic>? ?? {};
+    final canAssign = myPerm['canAssignTask'] ?? false;
+    final isCreator = groupData['creatorUid'] == _currentUser?.uid;
 
-  // 取得組員 email 清單（排除自己）
-  final List memberIds = groupData['memberIds'] ?? [];
-  final List<Map<String, String>> members = [];
-  for (final uid in memberIds) {
-    if (uid == _currentUser?.uid) continue;
-    final userDoc = await db.collection('users').doc(uid).get();
-    if (userDoc.exists) {
-      final email = (userDoc.data() as Map<String, dynamic>)['email'] ?? uid;
-      members.add({'uid': uid, 'email': email});
+    // 取得組員 email 清單（排除自己）
+    final List memberIds = groupData['memberIds'] ?? [];
+    final List<Map<String, String>> members = [];
+    for (final uid in memberIds) {
+      if (uid == _currentUser?.uid) continue;
+      final userDoc = await db.collection('users').doc(uid).get();
+      if (userDoc.exists) {
+        final email = (userDoc.data() as Map<String, dynamic>)['email'] ?? uid;
+        members.add({'uid': uid, 'email': email});
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        _canAssignTask = canAssign || isCreator;
+        _groupMembers = members;
+      });
     }
   }
 
-  if (mounted) {
-    setState(() {
-      _canAssignTask = canAssign || isCreator;
-      _groupMembers = members;
-    });
-  }
-}
   Widget _buildTimeWheel({
     required int itemCount,
     required int selectedValue,
@@ -280,7 +281,6 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
 
     setState(() { _isSaving = true; });
 
-    // 1. 準備寫入 Firestore 的任務本體資料
     final Map<String, dynamic> todoData = {
       'title': _titleController.text.trim(),
       'color': _selectedColorValue,
@@ -296,8 +296,7 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
     };
 
     try {
-      // 🎯 核心優化：線上獲取使用者在註冊時設定的個人檔案同步偏好
-      bool syncCalendarSettings = true; // 預設為 true (要一樣)
+      bool syncCalendarSettings = true; 
       if (_currentUser != null) {
         DocumentSnapshot userDoc = await FirebaseFirestore.instance
             .collection('users')
@@ -305,37 +304,33 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
             .get();
         if (userDoc.exists && userDoc.data() != null) {
           final userData = userDoc.data() as Map<String, dynamic>;
-          // 💡 請確保你們註冊頁面存入的欄位名稱叫作 'syncCalendarSettings' (型態為 bool)
           syncCalendarSettings = userData['syncCalendarSettings'] ?? true;
         }
       }
-      // 如果有指派對象，發送通知
-if (_assignedToUid != null && !_isEditMode) {
-  await FirebaseFirestore.instance.collection('notifications').add({
-    'type': 'taskAssigned',
-    'toUserId': _assignedToUid,
-    'toEmail': _assignedToEmail,
-    'fromUserId': _currentUser?.uid,
-    'fromEmail': _currentUser?.email,
-    'fromName': _currentUser?.displayName ?? _currentUser?.email,
-    'taskName': _titleController.text.trim(),
-    'groupId': _selectedGroupId,
-    'isRead': false,
-    'status': 'pending', // pending / accepted / rejected
-    'createdAt': FieldValue.serverTimestamp(),
-  });
-}
 
-      // 🎯 核心優化：偏好規則分流計算
+      if (_assignedToUid != null && !_isEditMode) {
+        await FirebaseFirestore.instance.collection('notifications').add({
+          'type': 'taskAssigned',
+          'toUserId': _assignedToUid,
+          'toEmail': _assignedToEmail,
+          'fromUserId': _currentUser?.uid,
+          'fromEmail': _currentUser?.email,
+          'fromName': _currentUser?.displayName ?? _currentUser?.email,
+          'taskName': _titleController.text.trim(),
+          'groupId': _selectedGroupId,
+          'isRead': false,
+          'status': 'pending', 
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      }
+
       String finalGoogleReminder = "不提醒";
       String finalGoogleRepeat = "不要";
 
       if (syncCalendarSettings) {
-        // 要一樣：完美複製 App 畫面上的參數
         finalGoogleReminder = _reminderSetting;
         finalGoogleRepeat = _repeatSetting;
       } else {
-        // 不要一樣：無視 App 的選擇，強制預設為不提醒、不重複
         print("【CalenBridge 偏好】使用者設定不同步參數，日曆將預設為不提醒與不重複。");
       }
 
@@ -347,8 +342,8 @@ if (_assignedToUid != null && !_isEditMode) {
             title: _titleController.text.trim(),
             startTime: _startDateTime,
             endTime: _endDateTime,
-            reminderSetting: finalGoogleReminder, // 👈 帶入分流後的參數
-            repeatSetting: finalGoogleRepeat,     // 👈 帶入分流後的參數
+            reminderSetting: finalGoogleReminder, 
+            repeatSetting: finalGoogleRepeat,    
             note: _noteController.text.trim(),
           );
           if (googleId != null) {
@@ -373,8 +368,8 @@ if (_assignedToUid != null && !_isEditMode) {
               title: _titleController.text.trim(),
               startTime: _startDateTime,
               endTime: _endDateTime,
-              reminderSetting: finalGoogleReminder, // 👈 帶入分流後的參數
-              repeatSetting: finalGoogleRepeat,     // 👈 帶入分流後的參數
+              reminderSetting: finalGoogleReminder, 
+              repeatSetting: finalGoogleRepeat,    
               note: _noteController.text.trim(),
             );
           } catch (googleError) {
@@ -515,47 +510,47 @@ if (_assignedToUid != null && !_isEditMode) {
                 );
               }).toList(),
               onChanged: (val) {
-  setState(() {
-    _selectedGroupId = val ?? "personal";
-    _assignedToUid = null;
-    _assignedToEmail = null;
-    _groupMembers = [];
-    _canAssignTask = false;
-  });
-  _loadGroupMembersAndPermission();
-},
+                setState(() {
+                  _selectedGroupId = val ?? "personal";
+                  _assignedToUid = null;
+                  _assignedToEmail = null;
+                  _groupMembers = [];
+                  _canAssignTask = false;
+                });
+                _loadGroupMembersAndPermission();
+              },
             ),
             const SizedBox(height: 16),
-            // ─── 指派組員（只有小組任務且有權限才顯示）──────────────────
-if (_selectedGroupId != 'personal' && _canAssignTask) ...[
-  const SizedBox(height: 16),
-  DropdownButtonFormField<String>(
-    value: _assignedToUid,
-    decoration: const InputDecoration(
-      labelText: '指派給',
-      prefixIcon: Icon(Icons.person_pin_rounded),
-    ),
-    items: [
-      const DropdownMenuItem(
-        value: null,
-        child: Text('不指派（所有人）'),
-      ),
-      ..._groupMembers.map((m) => DropdownMenuItem(
-            value: m['uid'],
-            child: Text(m['email']!),
-          )),
-    ],
-    onChanged: (val) {
-      setState(() {
-        _assignedToUid = val;
-        _assignedToEmail = val == null
-            ? null
-            : _groupMembers
-                .firstWhere((m) => m['uid'] == val)['email'];
-      });
-    },
-  ),
-],
+            
+            if (_selectedGroupId != 'personal' && _canAssignTask) ...[
+              const SizedBox(height: 16),
+              DropdownButtonFormField<String>(
+                value: _assignedToUid,
+                decoration: const InputDecoration(
+                  labelText: '指派給',
+                  prefixIcon: Icon(Icons.person_pin_rounded),
+                ),
+                items: [
+                  const DropdownMenuItem(
+                    value: null,
+                    child: Text('不指派（所有人）'),
+                  ),
+                  ..._groupMembers.map((m) => DropdownMenuItem(
+                        value: m['uid'],
+                        child: Text(m['email']!),
+                      )),
+                ],
+                onChanged: (val) {
+                  setState(() {
+                    _assignedToUid = val;
+                    _assignedToEmail = val == null
+                        ? null
+                        : _groupMembers
+                            .firstWhere((m) => m['uid'] == val)['email'];
+                  });
+                },
+              ),
+            ],
             TextField(
               controller: _noteController,
               decoration: const InputDecoration(labelText: '備註（選填）'),
@@ -571,7 +566,7 @@ if (_selectedGroupId != 'personal' && _canAssignTask) ...[
               onPressed: _isSaving ? null : _saveOrUpdateTodo,
               child: _isSaving 
                 ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                : Text(_isEditMode ? '確認修改任務' : '確認新增任務', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                : const Text('確認', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)), // 🎯 這裡改成一律顯示「確認」
             ),
           ],
         ),

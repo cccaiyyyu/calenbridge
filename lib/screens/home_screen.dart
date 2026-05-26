@@ -7,6 +7,8 @@ import 'package:calenbridge/screens/group_management_screen.dart';
 import 'package:calenbridge/screens/login_screen.dart';
 import 'package:calenbridge/screens/notification_screen.dart';
 import 'package:calenbridge/widgets/add_todo_bottom_sheet.dart';
+// 🎯 確保引入你的 GoogleCalendarService 檔案
+import 'package:calenbridge/services/google_calendar_service.dart'; 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -29,6 +31,9 @@ class _HomeScreenState extends State<HomeScreen> {
   ];
   bool _isLoadingGroups = true;
   bool _isRailExpanded = false;
+  
+  // 🎯 控制一鍵同步按鈕的讀取與動畫狀態
+  bool _isSyncing = false; 
 
   String _nickname = '';
   String _avatarUrl = '';
@@ -48,6 +53,153 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _fetchUserGroups();
+  }
+
+  // 🎯 全面翻修：智慧互動式勾選導入邏輯（完美修正排序、範圍與參數對齊）
+  Future<void> _handleCalendarSync() async {
+    setState(() { _isSyncing = true; });
+    try {
+      // 1. 向 Service 索取今日起兩週內、已排序、格式對齊的 Google 行程
+      final List<Map<String, dynamic>> incomingEvents = 
+          await GoogleCalendarService().fetchTwoWeeksGoogleEvents();
+
+      if (!mounted) return;
+
+      // 檢查有沒有可以導入的新行程
+      if (incomingEvents.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('ℹ️ 近兩週的 Google 行程皆已同步過，無新行程需要導入。'),
+            backgroundColor: Color(0xFF203764),
+          ),
+        );
+        return;
+      }
+
+      // 預設將撈到的行程全部勾選（Flags 陣列）
+      List<bool> selectedFlags = List.generate(incomingEvents.length, (index) => true);
+
+      // 2. 彈出客製化勾選對話視窗
+      showDialog(
+        context: context,
+        barrierDismissible: false, // 必須手動按下按鈕才能關閉，防呆安全
+        builder: (dialogContext) {
+          return StatefulBuilder(
+            builder: (context, setDialogState) {
+              return AlertDialog(
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                title: Row(
+                  children: [
+                    const Icon(Icons.playlist_add_check_rounded, color: Color(0xFF203764), size: 28),
+                    const SizedBox(width: 8),
+                    const Text('選擇欲導入的待辦事項', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                  ],
+                ),
+                content: SizedBox(
+                  width: double.maxFinite,
+                  height: 350, // 限制高度以防撐破網頁
+                  child: ListView.builder(
+                    itemCount: incomingEvents.length,
+                    itemBuilder: (context, index) {
+                      final event = incomingEvents[index];
+                      
+                      // 解析時間戳記用於 UI 展示
+                      DateTime parsedTime = DateTime.parse(event['startTime']);
+                      String formattedTime = "${parsedTime.month}/${parsedTime.day} "
+                          "${parsedTime.hour.toString().padLeft(2, '0')}:${parsedTime.minute.toString().padLeft(2, '0')}";
+
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade50,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.grey.shade200),
+                        ),
+                        child: CheckboxListTile(
+                          activeColor: const Color(0xFF203764),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                          title: Text(
+                            event['title'], 
+                            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: Text(
+                            '📅 時間: $formattedTime\n📝 備註: ${event['note']}',
+                            style: TextStyle(fontSize: 12, color: Colors.grey.shade700, height: 1.5),
+                          ),
+                          isThreeLine: true,
+                          value: selectedFlags[index],
+                          onChanged: (bool? value) {
+                            setDialogState(() {
+                              selectedFlags[index] = value ?? false;
+                            });
+                          },
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(dialogContext),
+                    child: const Text('取消', style: TextStyle(color: Colors.grey, fontWeight: FontWeight.w500)),
+                  ),
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF203764),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    ),
+                    onPressed: () async {
+                      Navigator.pop(dialogContext); // 關閉對話框
+                      setState(() { _isSyncing = true; }); // 重新啟動首頁轉圈圈
+
+                      int importCount = 0;
+                      try {
+                        for (int i = 0; i < incomingEvents.length; i++) {
+                          if (selectedFlags[i]) {
+                            // 批次真實寫入 Firestore
+                            await FirebaseFirestore.instance.collection('todos').add({
+                              ...incomingEvents[i],
+                              'createdAt': FieldValue.serverTimestamp(),
+                            });
+                            importCount++;
+                          }
+                        }
+                        
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('🎉 成功同步！已順利導入 $importCount 筆外部行程至待辦清單！'),
+                            backgroundColor: const Color(0xFF203764),
+                          ),
+                        );
+                      } catch (err) {
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('❌ 寫入資料庫失敗: $err'), backgroundColor: Colors.red),
+                        );
+                      } finally {
+                        if (mounted) setState(() { _isSyncing = false; });
+                      }
+                    },
+                    child: const Text('確認導入', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      );
+
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('❌ 同步失敗，請重新確認授權！錯誤: $e'), backgroundColor: Colors.red),
+      );
+    } finally {
+      setState(() { _isSyncing = false; });
+    }
   }
 
   Future<void> _fetchUserGroups() async {
@@ -484,7 +636,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           ListTile(
             leading: const Icon(Icons.calendar_month_rounded),
-            title: const Text('日曆'),
+            title: const Text('行事曆'),
             onTap: () {
               setState(() => _isRailExpanded = false);
               Navigator.push(
@@ -586,10 +738,39 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ),
                               ),
                         const SizedBox(height: 24),
-                        const Text(
-                          '待辦事項',
-                          style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                        
+                        // 🎯 升級版標題列：左側是標題，右側是一鍵同步按鈕
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text(
+                              '待辦事項',
+                              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                            ),
+                            
+                            // 如果正在同步讀取中，按鈕會變成轉圈圈
+                            _isSyncing
+                                ? const SizedBox(
+                                    width: 24,
+                                    height: 24,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2.5,
+                                      valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF203764)),
+                                    ),
+                                  )
+                                : ElevatedButton.icon(
+                                    onPressed: _isSyncing ? null : _handleCalendarSync,
+                                    icon: const Icon(Icons.sync_rounded, size: 18, color: Colors.white),
+                                    label: const Text('同步', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: const Color(0xFF203764),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                                    ),
+                                  ),
+                          ],
                         ),
+                        
                         const SizedBox(height: 16),
                         Expanded(
                           child: StreamBuilder<QuerySnapshot>(
