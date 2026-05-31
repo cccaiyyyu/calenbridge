@@ -7,6 +7,7 @@ import 'package:calenbridge/screens/group_management_screen.dart';
 import 'package:calenbridge/screens/login_screen.dart';
 import 'package:calenbridge/screens/notification_screen.dart';
 import 'package:calenbridge/widgets/add_todo_bottom_sheet.dart';
+import 'package:calenbridge/screens/register_info_screen.dart';
 // 🎯 確保引入你的 GoogleCalendarService 檔案
 import 'package:calenbridge/services/google_calendar_service.dart'; 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -272,29 +273,48 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _goToNotifications() {
+  void _goToNotifications() async {
     Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const NotificationScreen()),
     );
+    setState(() => _isLoadingGroups = true);
+    await _fetchUserGroups();
   }
 
   Query _buildTodoQuery() {
-    Query query = FirebaseFirestore.instance
-        .collection('todos')
-        .where('ownerUid', isEqualTo: _currentUser?.uid);
+  // 1. 先不要在一開始就綁死 ownerUid
+  Query query = FirebaseFirestore.instance.collection('todos');
+  final String currentUserId = _currentUser?.uid ?? '';
 
-    if (_selectedTab == "個人") {
-      query = query.where('groupId', isEqualTo: 'personal');
-    } else if (_selectedTab != "所有") {
-      final targetGroup = _groupTabs.firstWhere(
-        (t) => t['name'] == _selectedTab,
-        orElse: () => {"id": ""},
-      );
-      query = query.where('groupId', isEqualTo: targetGroup['id']);
-    }
-    return query;
+  if (_selectedTab == "個人") {
+    // 【個人頁籤】：必須是自己建立的（ownerUid 是自己），且 groupId 是 'personal'
+    query = query
+        .where('ownerUid', isEqualTo: currentUserId)
+        .where('groupId', isEqualTo: 'personal');
+
+  } else if (_selectedTab == "所有") {
+    // 【所有頁籤】：✨ 關鍵修正 ✨
+    // 只要是「指派給我」的任務都要顯示（不管是我自己建的，還是組長派給我的）
+    // 💡 注意：請確認你的任務文件裡有 'assignedTo' 這個欄位
+    query = query.where('assignedTo', isEqualTo: currentUserId);
+
+  } else {
+    // 【小組頁籤（例如 sa）】：
+    final targetGroup = _groupTabs.firstWhere(
+      (t) => t['name'] == _selectedTab,
+      orElse: () => {"id": ""},
+    );
+    
+    // ✨ 關鍵修正 ✨
+    // 撈出這個小組的任務，而且「只顯示指派給我自己」的那一筆
+    query = query
+        .where('groupId', isEqualTo: targetGroup['id'])
+        .where('assignedTo', isEqualTo: currentUserId);
   }
+
+  return query;
+}
 
   void _openTodoBottomSheet({String? todoId, Map<String, dynamic>? initialData}) {
     showModalBottomSheet(
@@ -342,14 +362,49 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _handleSignOut() async {
+  Future<void> _handleSwitchAccount() async {
+  try {
+    // 先登出目前帳號
     await FirebaseAuth.instance.signOut();
+
+    // 強制顯示 Google 帳號選擇器
+    GoogleAuthProvider googleProvider = GoogleAuthProvider();
+    googleProvider.addScope('https://www.googleapis.com/auth/calendar');
+    googleProvider.setCustomParameters({'prompt': 'select_account'});
+
+    UserCredential userCredential =
+        await FirebaseAuth.instance.signInWithPopup(googleProvider);
+    User? user = userCredential.user;
+
+    if (user == null || !mounted) return;
+
+    // 檢查是否為新用戶
+    DocumentSnapshot userDoc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .get();
+
     if (!mounted) return;
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
-    );
+
+    if (userDoc.exists) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const HomeScreen()),
+      );
+    } else {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const RegisterInfoScreen()),
+      );
+    }
+  } catch (e) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('切換失敗: $e')),
+      );
+    }
   }
+}
 
   String _formatDateTimeString(String? isoString) {
     if (isoString == null || isoString.isEmpty) return '未設定截止時間';
@@ -573,8 +628,20 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
-
+  Future<void> _goToEditProfile() async {
+  final result = await Navigator.push<bool>(
+    context,
+    MaterialPageRoute(
+      builder: (_) => const RegisterInfoScreen(isEditing: true),
+    ),
+  );
+  if (result == true) {
+    setState(() => _isLoadingGroups = true);
+    await _fetchUserGroups();
+  }
+}
   Widget _buildExpandedRail() {
+    
     final email = _currentUser?.email ?? '';
 
     return Container(
@@ -597,7 +664,28 @@ class _HomeScreenState extends State<HomeScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Row(
               children: [
-                _buildAvatar(radius: 22),
+                GestureDetector(
+  onTap: _goToEditProfile,
+  
+  child: Stack(
+    children: [
+      _buildAvatar(radius: 22),
+      Positioned(
+        right: 0,
+        bottom: 0,
+        child: Container(
+          width: 14,
+          height: 14,
+          decoration: const BoxDecoration(
+            color: Color(0xFF4A4458),
+            shape: BoxShape.circle,
+          ),
+          child: const Icon(Icons.edit, size: 9, color: Colors.white),
+        ),
+      ),
+    ],
+  ),
+),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Column(
@@ -655,12 +743,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           ..._buildGroupList(),
           const Divider(indent: 16, endIndent: 16),
-          ListTile(
-            leading: const Icon(Icons.home_rounded),
-            title: const Text('首頁'),
-            selected: true,
-            onTap: () => setState(() => _isRailExpanded = false),
-          ),
+      
           const SizedBox(height: 24),
           const Divider(indent: 16, endIndent: 16),
           ListTile(
@@ -675,11 +758,10 @@ class _HomeScreenState extends State<HomeScreen> {
             },
           ),
           ListTile(
-            leading: const Icon(Icons.logout_rounded),
-            title: const Text('登出'),
-            onTap: _handleSignOut,
-          ),
-          const SizedBox(height: 16),
+  leading: const Icon(Icons.switch_account_rounded),
+  title: const Text('切換帳號'),
+  onTap: _handleSwitchAccount,
+),
         ],
       ),
     );

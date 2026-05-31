@@ -20,8 +20,12 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       GoogleAuthProvider googleProvider = GoogleAuthProvider();
       
-      // 🎯 核心補強：向 Google 伺服器明確要到「讀寫 Google 行事曆」的史詩級權限！
+      // 🎯 權限補強：向 Google 伺服器明確要到「讀寫 Google 行事曆」的權限
       googleProvider.addScope('https://www.googleapis.com/auth/calendar');
+
+      // 🔥【超重要防守點】：強制 Google 彈出視窗每次都要讓使用者「選擇帳號」
+      // 這樣可以徹底根治網頁端切換帳號時，UID 沒有真正刷新的 Bug！
+      googleProvider.setCustomParameters({'prompt': 'select_account'});
 
       UserCredential userCredential = await FirebaseAuth.instance.signInWithPopup(googleProvider);
       User? user = userCredential.user;
@@ -29,10 +33,8 @@ class _LoginScreenState extends State<LoginScreen> {
       if (user != null) {
         print("【CalenBridge】登入成功，正在檢查是否為新會員... UID: ${user.uid}");
         
-        DocumentSnapshot userDoc = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(user.uid)
-            .get();
+        final db = FirebaseFirestore.instance;
+        DocumentSnapshot userDoc = await db.collection('users').doc(user.uid).get();
 
         if (!mounted) return;
 
@@ -43,7 +45,19 @@ class _LoginScreenState extends State<LoginScreen> {
             MaterialPageRoute(builder: (context) => const HomeScreen()),
           );
         } else {
-          print("【CalenBridge】新會員初次登入，導向個資設定頁！");
+          print("【CalenBridge】新會員初次登入，先初始化帳號資料，再導向個資設定頁！");
+          
+          // 💡 防守補強：在資料庫先建立基本文件，確保 UID 與 Email 優先綁定成功
+          await db.collection('users').doc(user.uid).set({
+            'uid': user.uid,
+            'email': user.email ?? '',
+            'nickname': user.displayName ?? '', // 先拿 Google 的名字擋一下，等一下讓他在個資頁改
+            'groupIds': [],                      // 預設沒有加入任何小組
+            'createdAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true)); // 使用 merge 防止覆蓋
+
+          if (!mounted) return;
+          
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(builder: (context) => const RegisterInfoScreen()),
@@ -54,7 +68,10 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
       print("【CalenBridge】登入失敗: $e");
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('登入失敗: $e')),
+        SnackBar(
+          content: Text('登入失敗: $e'),
+          behavior: SnackBarBehavior.floating,
+        ),
       );
     } finally {
       if (mounted) {

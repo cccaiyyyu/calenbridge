@@ -8,10 +8,15 @@ import 'dart:convert';
 import 'dart:typed_data'; 
 
 class RegisterInfoScreen extends StatefulWidget {
-  const RegisterInfoScreen({super.key});
+  final bool isEditing;
+  const RegisterInfoScreen({
+    super.key, 
+    this.isEditing = false, // <-- 加上這行
+  });
 
   @override
   State<RegisterInfoScreen> createState() => _RegisterInfoScreenState();
+  
 }
 
 class _RegisterInfoScreenState extends State<RegisterInfoScreen> {
@@ -39,7 +44,7 @@ class _RegisterInfoScreenState extends State<RegisterInfoScreen> {
   Uint8List? _webImage;
 
   bool _isLoading = false;
-
+  
   @override
   void dispose() {
     _nicknameController.dispose();
@@ -65,81 +70,140 @@ class _RegisterInfoScreenState extends State<RegisterInfoScreen> {
       });
     }
   }
+    @override
+void initState() {
+  super.initState();
+  if (widget.isEditing) {
+    _loadExistingProfile();
+  }
+}
 
+Future<void> _loadExistingProfile() async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
+
+  final userDoc = await FirebaseFirestore.instance
+      .collection('users')
+      .doc(user.uid)
+      .get();
+
+  if (!mounted || !userDoc.exists) return;
+
+  final data = userDoc.data() as Map<String, dynamic>;
+  final nickname = data['nickname'] ?? '';
+  final raw = data['avatarUrl'] ?? '';
+  
+  // 🎯 補強：讀取原本資料庫儲存的偏好設定，若無則給予預設值
+  final syncCalendar = data['syncCalendarSettings'] ?? false;
+  final notiHours = data['notificationFrequencyHours'] ?? 2;
+
+  setState(() {
+    _nicknameController.text = nickname;
+    _syncCalendarSettings = syncCalendar; // ✅ 正確回復 Switch 狀態
+    _notificationHours = notiHours;      // ✅ 正確回復下拉選單狀態
+
+    if (raw.startsWith('default_')) {
+      _selectedAvatarIndex = int.tryParse(raw.replaceFirst('default_', '')) ?? 0;
+      _webImage = null;
+      _pickedImage = null;
+    } else if (raw.startsWith('data:image')) {
+      _selectedAvatarIndex = -1;
+      final base64Str = raw.split(',').last;
+      _webImage = base64Decode(base64Str);
+    } else {
+      _selectedAvatarIndex = 0;
+    }
+  });
+}
   // 核心後端寫入邏輯
   Future<void> _saveProfileToFirestore() async {
-    if (!_formKey.currentState!.validate()) return;
+  if (!_formKey.currentState!.validate()) return;
 
-    setState(() { _isLoading = true; });
+  setState(() { _isLoading = true; });
 
-    try {
-      final User? user = FirebaseAuth.instance.currentUser;
-      
-      if (user != null) {
-        String avatarData = "";
+  try {
+    final User? user = FirebaseAuth.instance.currentUser;
+    
+    if (user != null) {
+      String avatarData = "";
 
-        if (_selectedAvatarIndex == -1 && _pickedImage != null) {
-          print("【CalenBridge】將圖片轉換為 Base64 字串...");
-          Uint8List bytes = _webImage ?? await _pickedImage!.readAsBytes();
-          avatarData = "data:image/jpeg;base64,${base64Encode(bytes)}";
-          
-          if (avatarData.length > 1000000) {
-            throw Exception("圖片檔案太大了，即使壓縮後仍超過資料庫限制，請更換其他照片。");
-          }
-        } else {
-          avatarData = "default_$_selectedAvatarIndex";
-        }
-
-        print("【CalenBridge】準備寫入 Firestore，目標 UID: ${user.uid}");
-
-        // 🎯 寫入 Firestore 
-        await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
-          'uid': user.uid,
-          'email': user.email,
-          'nickname': _nicknameController.text.trim(),
-          'avatarUrl': avatarData, 
-          'notificationFrequencyHours': _notificationHours,
-          'syncCalendarSettings': _syncCalendarSettings, // 🎯 關鍵：將使用者的偏好寫入資料庫
-          'createdAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-
-        print("【CalenBridge】後端 Firestore 寫入成功！");
-
-        if (!mounted) return;
+      if (_selectedAvatarIndex == -1 && _webImage != null) {
+        print("【CalenBridge】將圖片轉換為 Base64 字串...");
+        avatarData = "data:image/jpeg;base64,${base64Encode(_webImage!)}";
         
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('個人偏好設定儲存成功！')),
-        );
+        if (avatarData.length > 1000000) {
+          throw Exception("圖片檔案太大了，即使壓縮後仍超過資料庫限制，請更換其他照片。");
+        }
+      } else {
+        avatarData = "default_$_selectedAvatarIndex";
+      }
 
+      print("【CalenBridge】準備寫入 Firestore，目標 UID: ${user.uid}");
+
+      // 🎯 建立要寫入或更新的 Map 資料
+      final Map<String, dynamic> userData = {
+        'uid': user.uid,
+        'email': user.email ?? '',
+        'nickname': _nicknameController.text.trim(),
+        'avatarUrl': avatarData, 
+        'notificationFrequencyHours': _notificationHours,
+        'syncCalendarSettings': _syncCalendarSettings,
+      };
+
+      // 🔥【防守關鍵】：如果是新會員（第一次初始化設定），才寫入註冊時間
+      if (!widget.isEditing) {
+        userData['createdAt'] = FieldValue.serverTimestamp();
+      }
+
+      // 寫入 Firestore (使用 merge 確保沒被蓋掉的欄位如 groupIds 依然健全)
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .set(userData, SetOptions(merge: true));
+
+      print("【CalenBridge】後端 Firestore 寫入成功！");
+
+      if (!mounted) return;
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(widget.isEditing ? '偏好設定修改成功！' : '個人偏好初始化成功！')),
+      );
+
+      // 如果只是編輯模式，可以直接 pop 回去首頁或前一頁，不一定要推 Replacement
+      if (widget.isEditing) {
+        Navigator.pop(context);
+      } else {
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (context) => const HomeScreen()),
         );
       }
-    } catch (e) {
-      print("【CalenBridge】Firestore 寫入異常: $e");
-      if (!mounted) return;
-      
-      String errorMsg = e.toString();
-      if (errorMsg.contains("longer than 1048487 bytes")) {
-        errorMsg = "照片檔案太大（超過1MB限制），請嘗試更換其他照片或裁剪後上傳！";
-      }
+    }
+  } catch (e) {
+    print("【CalenBridge】Firestore 寫入異常: $e");
+    if (!mounted) return;
+    
+    String errorMsg = e.toString();
+    if (errorMsg.contains("longer than 1048487 bytes")) {
+      errorMsg = "照片檔案太大（超過1MB限制），請嘗試更換其他照片或裁剪後上傳！";
+    }
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('寫入後台資料庫失敗: $errorMsg')),
-      );
-    } finally {
-      if (mounted) {
-        setState(() { _isLoading = false; });
-      }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('寫入後台資料庫失敗: $errorMsg')),
+    );
+  } finally {
+    if (mounted) {
+      setState(() { _isLoading = false; });
     }
   }
+}
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('個人偏好初始化設定', style: TextStyle(fontWeight: FontWeight.bold)),
+        title: Text(widget.isEditing ? '個人化設定' : '個人偏好初始化設定'),
+        //title: const Text('個人偏好初始化設定', style: TextStyle(fontWeight: FontWeight.bold)),
         centerTitle: true,
         automaticallyImplyLeading: false,
       ),

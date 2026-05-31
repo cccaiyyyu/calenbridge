@@ -280,7 +280,17 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
     }
 
     setState(() { _isSaving = true; });
-
+    final String currentUserId = _currentUser?.uid ?? '';
+    String finalAssignedTo = currentUserId;
+    if (_selectedGroupId == 'personal') {
+        finalAssignedTo = currentUserId;
+    } else {
+  // 如果是群組任務：
+  // 優先看畫面上現在選了誰 (_assignedToUid)
+  // 如果是編輯模式、畫面上沒變動，就維持原本資料庫裡的指派對象 (initialData!['assignedTo'])
+  // 如果都沒有，才預設是自己
+  finalAssignedTo = _assignedToUid ?? (widget.initialData?['assignedTo'] ?? currentUserId);
+    }
     final Map<String, dynamic> todoData = {
       'title': _titleController.text.trim(),
       'color': _selectedColorValue,
@@ -289,10 +299,11 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
       'reminderSetting': _reminderSetting,
       'repeatSetting': _repeatSetting,
       'groupId': _selectedGroupId,
-      'ownerUid': _currentUser?.uid, 
+      'ownerUid': currentUserId,
       'note': _noteController.text.trim(),
       'assignedToUid': _assignedToUid,
       'assignedToEmail': _assignedToEmail,
+      'assignedTo': finalAssignedTo,
     };
 
     try {
@@ -335,27 +346,36 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
       }
 
       if (!_isEditMode) {
-        // 新增模式
-        try {
-          print("【CalenBridge 聯動】正在連動建立 Google 行事曆事件...");
-          final String? googleId = await GoogleCalendarService().insertEventToGoogleCalendar(
-            title: _titleController.text.trim(),
-            startTime: _startDateTime,
-            endTime: _endDateTime,
-            reminderSetting: finalGoogleReminder, 
-            repeatSetting: finalGoogleRepeat,    
-            note: _noteController.text.trim(),
-          );
-          if (googleId != null) {
-            todoData['googleEventId'] = googleId;
-          }
-        } catch (googleError) {
-          print("【CalenBridge 提醒】Google 日曆背景建立同步略過: $googleError");
-        }
+  // 新增模式
+       try {
+    print("【CalenBridge 聯動】正在連動建立 Google 行事曆事件...");
+    final String? googleId = await GoogleCalendarService().insertEventToGoogleCalendar(
+      title: _titleController.text.trim(),
+      startTime: _startDateTime,
+      endTime: _endDateTime,
+      reminderSetting: finalGoogleReminder, 
+      repeatSetting: finalGoogleRepeat,    
+      note: _noteController.text.trim(),
+    );
+    if (googleId != null) {
+      todoData['googleEventId'] = googleId;
+    }
+  } catch (googleError) {
+    print("【CalenBridge 提醒】Google 日曆背景建立同步略過: $googleError");
+  }
+
+  todoData['createdAt'] = FieldValue.serverTimestamp();
 
         todoData['createdAt'] = FieldValue.serverTimestamp();
-        await FirebaseFirestore.instance.collection('todos').add(todoData);
-      } else {
+        if (_selectedGroupId == 'personal' || _assignedToUid == null || _assignedToUid == _currentUser?.uid) {
+    await FirebaseFirestore.instance.collection('todos').add(todoData);
+    print("【CalenBridge】個人或一般群組任務，已直接寫入 todos 集合。");
+  } else {
+    // 如果是派給組員的任務，這裡「不要」加進 todos 集合！
+    // 剛才在上面已經執行過發送 notifications 的通知了，這樣就完全足夠了。
+    print("【CalenBridge】此任務為指派任務，已送出通知，等待組員接受後才會正式建立任務。");
+  }
+} else {
         // 修改模式
         await FirebaseFirestore.instance.collection('todos').doc(widget.todoId).update(todoData);
 
@@ -377,7 +397,18 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
           }
         }
       }
+      if (!_isEditMode) {
+  // 新增模式
+  // ... Google Calendar 聯動 ...
 
+  todoData['createdAt'] = FieldValue.serverTimestamp();
+
+  // ✨ 微調：如果是派給別人的群組任務，先不寫入 todos 集合，只發通知。
+  // 只有當是個人任務，或是指派給自己（所有人）時，才立刻寫入 todos。
+  if (_selectedGroupId == 'personal' || _assignedToUid == null || _assignedToUid == _currentUser?.uid) {
+    await FirebaseFirestore.instance.collection('todos').add(todoData);
+  }
+    }
       widget.onTodoAdded(); 
       if (!mounted) return;
       Navigator.pop(context); 

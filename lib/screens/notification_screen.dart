@@ -52,29 +52,67 @@ class NotificationScreen extends StatelessWidget {
     }
   }
 
-  Future<void> _handleTaskAssign({
+ Future<void> _handleTaskAssign({
     required BuildContext context,
     required String notifId,
     required bool accepted,
   }) async {
-    await FirebaseFirestore.instance
-        .collection('notifications')
-        .doc(notifId)
-        .update({
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return;
+
+    final db = FirebaseFirestore.instance;
+    final batch = db.batch();
+
+    // 1. 先抓出這則通知的詳細內容（這樣才能拿到任務名稱、群組 ID 等等）
+    final notifDoc = await db.collection('notifications').doc(notifId).get();
+    if (!notifDoc.exists) return;
+    
+    final notifData = notifDoc.data() as Map<String, dynamic>;
+
+    // 2. 更新通知本身的狀態為已讀、已接受/已拒絕
+    batch.update(db.collection('notifications').doc(notifId), {
       'status': accepted ? 'accepted' : 'rejected',
       'isRead': true,
     });
 
+    // 3. ✨ 【核心修正】：如果組員「接受」了任務，真正把任務塞進 TODOS 集合中
+    if (accepted) {
+      // 🎯 修正點 1：將原本的 'tasks' 集合改成你的主畫面在使用的 'todos'
+      final todoRef = db.collection('todos').doc(); 
+      
+      batch.set(todoRef, {
+        'title': notifData['taskName'] ?? '未命名任務',
+        'note': '由組長 ${notifData['fromName'] ?? '組長'} 指派的任務',
+        'groupId': notifData['groupId'] ?? '',
+        'ownerUid': notifData['fromUserId'] ?? '',               // 建立者是組長
+        
+        // 🎯 修正點 2：完整對接你 `todos` 集合在用的指派欄位格式
+        'assignedTo': currentUser.uid,                           // 給組員的 UID
+        'assignedToUid': currentUser.uid,                        // 確保過濾器防呆
+        'assignedToEmail': currentUser.email ?? '',
+        
+        'isCompleted': false,                                    // 預設未完成
+        'startTime': DateTime.now().toIso8601String(),           // 預設當前時間
+        'endTime': DateTime.now().add(const Duration(hours: 1)).toIso8601String(),
+        'reminderSetting': "不提醒",
+        'repeatSetting': "不要",
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    }
+
+    // 4. 一口氣寫入資料庫
+    await batch.commit();
+
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(accepted ? '已接受任務' : '已拒絕任務'),
+          content: Text(accepted ? '已接受任務，已加入你的任務清單！' : '已拒絕任務'),
           behavior: SnackBarBehavior.floating,
         ),
       );
     }
   }
-
+  
   Future<void> _markAllAsRead(String userId) async {
     final db = FirebaseFirestore.instance;
     final unreadDocs = await db
@@ -90,21 +128,26 @@ class NotificationScreen extends StatelessWidget {
     await batch.commit();
   }
 
-  String _formatTime(dynamic timestamp) {
-    if (timestamp == null) return '';
-    try {
-      final dt = (timestamp as Timestamp).toDate();
-      final now = DateTime.now();
-      final diff = now.difference(dt);
-      if (diff.inMinutes < 1) return '剛剛';
-      if (diff.inMinutes < 60) return '${diff.inMinutes} 分鐘前';
-      if (diff.inHours < 24) return '${diff.inHours} 小時前';
-      if (diff.inDays < 7) return '${diff.inDays} 天前';
-      return DateFormat('MM/dd').format(dt);
-    } catch (_) {
-      return '';
+ String _formatTime(BuildContext context, dynamic timestamp) {
+  if (timestamp == null) return '';
+  try {
+    final dt = (timestamp as Timestamp).toDate();
+    final now = DateTime.now();
+    final diff = now.difference(dt);
+    if (diff.inMinutes < 1) return '剛剛';
+    if (diff.inMinutes < 60) return '${diff.inMinutes} 分鐘前';
+    if (diff.inHours < 24) return '${diff.inHours} 小時前';
+    if (diff.inDays < 7) return '${diff.inDays} 天前';
+    return DateFormat('MM/dd').format(dt);
+  } catch (e) { // 1. 改成 (e) 才能抓到錯誤訊息
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('操作失敗: $e')),
+      );
     }
+    return ''; // 2. 補上這行！確保發生錯誤時也能回傳一個 String
   }
+}
 
   @override
   Widget build(BuildContext context) {
@@ -126,10 +169,9 @@ class NotificationScreen extends StatelessWidget {
       ),
       body: StreamBuilder<QuerySnapshot>(
         stream: FirebaseFirestore.instance
-            .collection('notifications')
-            .where('toUserId', isEqualTo: currentUser.uid)
-            .orderBy('createdAt', descending: true)
-            .snapshots(),
+          .collection('notifications')
+          .where('toUserId', isEqualTo: currentUser.uid)
+          .snapshots(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
@@ -158,79 +200,90 @@ class NotificationScreen extends StatelessWidget {
             );
           }
 
-          final docs = snapshot.data!.docs;
+          // 1. 先在 ListView 建立前就把資料複製並排序好，避免滾動時重複排序造成卡頓
+final sortedDocs = List.from(snapshot.data!.docs);
+sortedDocs.sort((a, b) {
+  final aTime = (a.data() as Map<String, dynamic>)['createdAt'];
+  final bTime = (b.data() as Map<String, dynamic>)['createdAt'];
+  if (aTime == null) return 1;
+  if (bTime == null) return -1;
+  return (bTime as Timestamp).compareTo(aTime as Timestamp);
+});
 
-          return ListView.builder(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            itemCount: docs.length,
-            itemBuilder: (context, index) {
-              final notif = docs[index].data() as Map<String, dynamic>;
-              final notifId = docs[index].id;
-              final isRead = notif['isRead'] ?? false;
-              final status = notif['status'] ?? 'pending';
-              final isPending = status == 'pending';
-              final type = notif['type'] ?? '';
-              final timeStr = _formatTime(notif['createdAt']);
-
-              return _NotificationTile(
-                isRead: isRead,
-                isPending: isPending,
-                status: status,
-                type: type,
-                notif: notif,
-                timeStr: timeStr,
-                onAccept: () {
-                  if (type == 'taskAssigned') {
-                    _handleTaskAssign(
-                      context: context,
-                      notifId: notifId,
-                      accepted: true,
-                    );
-                  } else {
-                    _handleNotificationAction(
-                      context: context,
-                      notifId: notifId,
-                      groupId: notif['groupId'] ?? '',
-                      groupName: notif['groupName'] ?? '',
-                      canAssignTask: notif['canAssignTask'] ?? false,
-                      accepted: true,
-                    );
-                  }
-                },
-                onReject: () {
-                  if (type == 'taskAssigned') {
-                    _handleTaskAssign(
-                      context: context,
-                      notifId: notifId,
-                      accepted: false,
-                    );
-                  } else {
-                    _handleNotificationAction(
-                      context: context,
-                      notifId: notifId,
-                      groupId: notif['groupId'] ?? '',
-                      groupName: notif['groupName'] ?? '',
-                      canAssignTask: notif['canAssignTask'] ?? false,
-                      accepted: false,
-                    );
-                  }
-                },
-                onTap: isRead
-                    ? null
-                    : () {
-                        FirebaseFirestore.instance
-                            .collection('notifications')
-                            .doc(notifId)
-                            .update({'isRead': true});
-                      },
-              );
-            },
+return ListView.builder(
+  padding: const EdgeInsets.symmetric(vertical: 8),
+  itemCount: sortedDocs.length, 
+  itemBuilder: (context, index) {
+    final notif = sortedDocs[index].data() as Map<String, dynamic>;
+    final notifId = sortedDocs[index].id;
+    
+    final isRead = notif['isRead'] ?? false;
+    final status = notif['status'] ?? 'pending';
+    final isPending = status == 'pending';
+    final type = notif['type'] ?? '';
+    
+    final timeStr = _formatTime(context, notif['createdAt']);
+    
+    return _NotificationTile(
+      isRead: isRead,
+      isPending: isPending,
+      status: status,
+      type: type,
+      notif: notif,
+      timeStr: timeStr,
+      onAccept: () {
+        if (type == 'taskAssigned') {
+          _handleTaskAssign(
+            context: context,
+            notifId: notifId,
+            accepted: true,
           );
+        } else {
+          _handleNotificationAction(
+            context: context,
+            notifId: notifId,
+            groupId: notif['groupId'] ?? '',
+            groupName: notif['groupName'] ?? '',
+            canAssignTask: notif['canAssignTask'] ?? false,
+            accepted: true,
+          );
+        }
+      },
+      onReject: () {
+        if (type == 'taskAssigned') {
+          _handleTaskAssign(
+            context: context,
+            notifId: notifId,
+            accepted: false,
+          );
+        } else {
+          _handleNotificationAction(
+            context: context,
+            notifId: notifId,
+            groupId: notif['groupId'] ?? '',
+            groupName: notif['groupName'] ?? '',
+            canAssignTask: notif['canAssignTask'] ?? false,
+            accepted: false,
+          );
+        }
+      },
+      onTap: isRead
+          ? null
+          : () {
+              FirebaseFirestore.instance
+                  .collection('notifications')
+                  .doc(notifId)
+                  .update({'isRead': true});
+            },
+    ); 
+  }, 
+);
         },
       ),
     );
   }
 }
+
 
 class _NotificationTile extends StatelessWidget {
   final bool isRead;
