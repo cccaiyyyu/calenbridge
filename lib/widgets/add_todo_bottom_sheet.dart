@@ -245,6 +245,7 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
   }
 
   Future<void> _deleteTodo() async {
+    
     if (!_isEditMode) return;
     setState(() { _isSaving = true; });
     try {
@@ -269,62 +270,83 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
   }
 
   Future<void> _saveOrUpdateTodo() async {
-    if (_titleController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('任務名稱不能留空喔！')));
-      return;
-    }
+  // 1. 基本前端欄位驗證
+  if (_titleController.text.trim().isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('任務名稱不能留空喔！')));
+    return;
+  }
 
-    if (_endDateTime.isBefore(_startDateTime) || _endDateTime.isAtSameMomentAs(_startDateTime)) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('結束時間必須晚於開始時間喔！')));
-      return;
-    }
+  if (_endDateTime.isBefore(_startDateTime) || _endDateTime.isAtSameMomentAs(_startDateTime)) {
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('結束時間必須晚於開始時間喔！')));
+    return;
+  }
 
-    setState(() { _isSaving = true; });
-    final String currentUserId = _currentUser?.uid ?? '';
-    String finalAssignedTo = currentUserId;
-    if (_selectedGroupId == 'personal') {
-        finalAssignedTo = currentUserId;
-    } else {
-  // 如果是群組任務：
-  // 優先看畫面上現在選了誰 (_assignedToUid)
-  // 如果是編輯模式、畫面上沒變動，就維持原本資料庫裡的指派對象 (initialData!['assignedTo'])
-  // 如果都沒有，才預設是自己
-  finalAssignedTo = _assignedToUid ?? (widget.initialData?['assignedTo'] ?? currentUserId);
-    }
-    final Map<String, dynamic> todoData = {
-      'title': _titleController.text.trim(),
-      'color': _selectedColorValue,
-      'startTime': _startDateTime.toIso8601String(), 
-      'endTime': _endDateTime.toIso8601String(),
-      'reminderSetting': _reminderSetting,
-      'repeatSetting': _repeatSetting,
-      'groupId': _selectedGroupId,
-      'ownerUid': currentUserId,
-      'note': _noteController.text.trim(),
-      'assignedToUid': _assignedToUid,
-      'assignedToEmail': _assignedToEmail,
-      'assignedTo': finalAssignedTo,
-    };
+  // 🔥 【關鍵防守 1】：一進來在任何 await 之前，立刻鎖死按鈕防止重複點擊
+  setState(() { _isSaving = true; });
 
-    try {
-      bool syncCalendarSettings = true; 
-      if (_currentUser != null) {
-        DocumentSnapshot userDoc = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(_currentUser.uid)
-            .get();
-        if (userDoc.exists && userDoc.data() != null) {
-          final userData = userDoc.data() as Map<String, dynamic>;
-          syncCalendarSettings = userData['syncCalendarSettings'] ?? true;
-        }
+  final String currentUserId = _currentUser?.uid ?? '';
+  String finalAssignedTo = currentUserId;
+  
+  if (_selectedGroupId == 'personal') {
+    finalAssignedTo = currentUserId;
+  } else {
+    // 如果是群組任務：
+    // 優先看畫面上現在選了誰 (_assignedToUid)
+    // 如果是編輯模式、畫面上沒變動，就維持原本資料庫裡的指派對象 (initialData!['assignedTo'])
+    // 如果都沒有，才預設是自己
+    finalAssignedTo = _assignedToUid ?? (widget.initialData?['assignedTo'] ?? currentUserId);
+  }
+
+  final Map<String, dynamic> todoData = {
+    'title': _titleController.text.trim(),
+    'color': _selectedColorValue,
+    'startTime': _startDateTime.toIso8601String(), 
+    'endTime': _endDateTime.toIso8601String(),
+    'reminderSetting': _reminderSetting,
+    'repeatSetting': _repeatSetting,
+    'groupId': _selectedGroupId,
+    'ownerUid': currentUserId,
+    'note': _noteController.text.trim(),
+    'assignedToUid': _assignedToUid,
+    'assignedToEmail': _assignedToEmail,
+    'assignedTo': finalAssignedTo,
+  };
+
+  try {
+    // 2. 獲取使用者偏好設定（是否同步日曆）
+    bool syncCalendarSettings = true; 
+    if (_currentUser != null) {
+      DocumentSnapshot userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(_currentUser.uid)
+          .get();
+      if (userDoc.exists && userDoc.data() != null) {
+        final userData = userDoc.data() as Map<String, dynamic>;
+        syncCalendarSettings = userData['syncCalendarSettings'] ?? true;
       }
+    }
 
-      if (_assignedToUid != null && !_isEditMode) {
+    String finalGoogleReminder = "不提醒";
+    String finalGoogleRepeat = "不要";
+
+    if (syncCalendarSettings) {
+      finalGoogleReminder = _reminderSetting;
+      finalGoogleRepeat = _repeatSetting;
+    } else {
+      print("【CalenBridge 偏好】使用者設定不同步參數，日曆將預設為不提醒與不重複。");
+    }
+
+    // 3. 進入核心：新增與修改分流（已移除重複的 if 判斷區塊）
+    if (!_isEditMode) {
+      // ---------------- 新增模式 ----------------
+
+      // A. 如果是指派給「別的組員」，先發送通知
+      if (_selectedGroupId != 'personal' && _assignedToUid != null && _assignedToUid != currentUserId) {
         await FirebaseFirestore.instance.collection('notifications').add({
           'type': 'taskAssigned',
           'toUserId': _assignedToUid,
           'toEmail': _assignedToEmail,
-          'fromUserId': _currentUser?.uid,
+          'fromUserId': currentUserId,
           'fromEmail': _currentUser?.email,
           'fromName': _currentUser?.displayName ?? _currentUser?.email,
           'taskName': _titleController.text.trim(),
@@ -333,92 +355,71 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
           'status': 'pending', 
           'createdAt': FieldValue.serverTimestamp(),
         });
+        print("【CalenBridge】此任務為指派任務，已送出通知，等待組員接受。");
       }
 
-      String finalGoogleReminder = "不提醒";
-      String finalGoogleRepeat = "不要";
-
-      if (syncCalendarSettings) {
-        finalGoogleReminder = _reminderSetting;
-        finalGoogleRepeat = _repeatSetting;
-      } else {
-        print("【CalenBridge 偏好】使用者設定不同步參數，日曆將預設為不提醒與不重複。");
+      // B. 連動建立 Google 行事曆事件
+      try {
+        print("【CalenBridge 聯動】正在連動建立 Google 行事曆事件...");
+        final String? googleId = await GoogleCalendarService().insertEventToGoogleCalendar(
+          title: _titleController.text.trim(),
+          startTime: _startDateTime,
+          endTime: _endDateTime,
+          reminderSetting: finalGoogleReminder, 
+          repeatSetting: finalGoogleRepeat,    
+          note: _noteController.text.trim(),
+        );
+        if (googleId != null) {
+          todoData['googleEventId'] = googleId;
+        }
+      } catch (googleError) {
+        print("【CalenBridge 提醒】Google 日曆背景建立同步略過: $googleError");
       }
 
-      if (!_isEditMode) {
-  // 新增模式
-       try {
-    print("【CalenBridge 聯動】正在連動建立 Google 行事曆事件...");
-    final String? googleId = await GoogleCalendarService().insertEventToGoogleCalendar(
-      title: _titleController.text.trim(),
-      startTime: _startDateTime,
-      endTime: _endDateTime,
-      reminderSetting: finalGoogleReminder, 
-      repeatSetting: finalGoogleRepeat,    
-      note: _noteController.text.trim(),
-    );
-    if (googleId != null) {
-      todoData['googleEventId'] = googleId;
-    }
-  } catch (googleError) {
-    print("【CalenBridge 提醒】Google 日曆背景建立同步略過: $googleError");
-  }
+      todoData['createdAt'] = FieldValue.serverTimestamp();
 
-  todoData['createdAt'] = FieldValue.serverTimestamp();
+      // 🔥 【關鍵防守 2】：只有當是個人任務、發給所有人(null)、或指派給自己時，才寫入 todos 集合
+      if (_selectedGroupId == 'personal' || _assignedToUid == null || _assignedToUid == currentUserId) {
+        await FirebaseFirestore.instance.collection('todos').add(todoData);
+        print("【CalenBridge】個人或一般群組任務，已直接寫入 todos 集合。");
+      }
 
-        todoData['createdAt'] = FieldValue.serverTimestamp();
-        if (_selectedGroupId == 'personal' || _assignedToUid == null || _assignedToUid == _currentUser?.uid) {
-    await FirebaseFirestore.instance.collection('todos').add(todoData);
-    print("【CalenBridge】個人或一般群組任務，已直接寫入 todos 集合。");
-  } else {
-    // 如果是派給組員的任務，這裡「不要」加進 todos 集合！
-    // 剛才在上面已經執行過發送 notifications 的通知了，這樣就完全足夠了。
-    print("【CalenBridge】此任務為指派任務，已送出通知，等待組員接受後才會正式建立任務。");
-  }
-} else {
-        // 修改模式
-        await FirebaseFirestore.instance.collection('todos').doc(widget.todoId).update(todoData);
+    } else {
+      // ---------------- 修改模式 ----------------
+      await FirebaseFirestore.instance.collection('todos').doc(widget.todoId).update(todoData);
 
-        final String? googleEventId = widget.initialData?['googleEventId'];
-        if (googleEventId != null && googleEventId.isNotEmpty) {
-          try {
-            print("【CalenBridge 聯動】正在連動修改 Google 行事曆事件...");
-            await GoogleCalendarService().updateEventInGoogleCalendar(
-              googleEventId: googleEventId,
-              title: _titleController.text.trim(),
-              startTime: _startDateTime,
-              endTime: _endDateTime,
-              reminderSetting: finalGoogleReminder, 
-              repeatSetting: finalGoogleRepeat,    
-              note: _noteController.text.trim(),
-            );
-          } catch (googleError) {
-            print("【CalenBridge 提醒】Google 日曆修改同步失敗: $googleError");
-          }
+      final String? googleEventId = widget.initialData?['googleEventId'];
+      if (googleEventId != null && googleEventId.isNotEmpty) {
+        try {
+          print("【CalenBridge 聯動】正在連動修改 Google 行事曆事件...");
+          await GoogleCalendarService().updateEventInGoogleCalendar(
+            googleEventId: googleEventId,
+            title: _titleController.text.trim(),
+            startTime: _startDateTime,
+            endTime: _endDateTime,
+            reminderSetting: finalGoogleReminder, 
+            repeatSetting: finalGoogleRepeat,    
+            note: _noteController.text.trim(),
+          );
+        } catch (googleError) {
+          print("【CalenBridge 提醒】Google 日曆修改同步失敗: $googleError");
         }
       }
-      if (!_isEditMode) {
-  // 新增模式
-  // ... Google Calendar 聯動 ...
-
-  todoData['createdAt'] = FieldValue.serverTimestamp();
-
-  // ✨ 微調：如果是派給別人的群組任務，先不寫入 todos 集合，只發通知。
-  // 只有當是個人任務，或是指派給自己（所有人）時，才立刻寫入 todos。
-  if (_selectedGroupId == 'personal' || _assignedToUid == null || _assignedToUid == _currentUser?.uid) {
-    await FirebaseFirestore.instance.collection('todos').add(todoData);
-  }
+      print("【CalenBridge】任務修改完成。");
     }
-      widget.onTodoAdded(); 
-      if (!mounted) return;
-      Navigator.pop(context); 
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('資料庫處理失敗: $e')));
-    } finally {
-      if (mounted) setState(() { _isSaving = false; });
-    }
-  }
 
+    // 4. 成功後的回呼與關閉視窗
+    widget.onTodoAdded(); 
+    if (!mounted) return;
+    Navigator.pop(context); 
+
+  } catch (e) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('資料庫處理失敗: $e')));
+  } finally {
+    // 5. 不管成功或失敗，最後一定會解除按鈕鎖定
+    if (mounted) setState(() { _isSaving = false; });
+  }
+}
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -564,7 +565,7 @@ class _AddTodoBottomSheetState extends State<AddTodoBottomSheet> {
                 items: [
                   const DropdownMenuItem(
                     value: null,
-                    child: Text('不指派（所有人）'),
+                    child: Text('自己'),
                   ),
                   ..._groupMembers.map((m) => DropdownMenuItem(
                         value: m['uid'],

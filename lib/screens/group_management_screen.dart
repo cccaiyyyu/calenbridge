@@ -112,15 +112,25 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
     );
 
     if (moveToPersonal == true) {
-      // 把任務的 groupId 改成 personal
-      final batch = db.batch();
-      for (final doc in myTodos.docs) {
-        batch.update(db.collection('todos').doc(doc.id), {
-          'groupId': 'personal',
-        });
-      }
-      await batch.commit();
-    }
+  // 把任務的 groupId 改成 personal，並把所有權全數收回給自己
+  final batch = db.batch();
+  final String currentUserId = _currentUser?.uid ?? ''; // 確保能拿到你當前的 UID
+  final String currentUserEmail = _currentUser?.email ?? ''; // 你的 Email
+
+  for (final doc in myTodos.docs) {
+    batch.update(db.collection('todos').doc(doc.id), {
+      'groupId': 'personal',
+      
+      // 🔥 【核心修正】把這筆任務的主權強行改成你自己，這樣不論個人清單怎麼判斷，三個點都會出來！
+      'ownerUid': currentUserId, 
+      'assignedToUid': currentUserId, // 或者是 null，看你個人任務的預設值
+      'assignedTo': currentUserId,
+      'assignedToEmail': currentUserEmail, // 順便更正綁定的 Email
+    });
+  }
+  await batch.commit();
+  print("【CalenBridge】群組任務已成功移回個人，且主權已全部重設為當前使用者。");
+}
   }
 
   // ─── 刪除小組 ────────────────────────────────────────────────
