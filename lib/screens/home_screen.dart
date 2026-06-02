@@ -79,186 +79,208 @@ class _HomeScreenState extends State<HomeScreen> {
           List.generate(incomingEvents.length, (index) => true);
 
       // ✅ 修正 1：用 Completer 等待對話框完整結束後才執行後續邏輯
-      await showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (dialogContext) {
-          return StatefulBuilder(
-            builder: (context, setDialogState) {
-              return AlertDialog(
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(20)),
-                title: Row(
+await showDialog(
+  context: context,
+  barrierDismissible: false,
+  builder: (dialogContext) {
+    return StatefulBuilder(
+      builder: (context, setDialogState) {
+        // 🎯 智慧計算：檢查目前是否全部的任務都被勾選了
+        bool isAllSelected = selectedFlags.every((flag) => flag == true);
+
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20)),
+          title: Row(
+            children: [
+              const Icon(Icons.playlist_add_check_rounded,
+                  color: Color(0xFF203764), size: 28),
+              const SizedBox(width: 8),
+              // 用 Expanded 讓文字佔滿左側，把全選方塊推到最右上角
+              const Expanded(
+                child: Text('選擇欲導入的待辦事項',
+                    style: TextStyle(
+                        fontWeight: FontWeight.bold, fontSize: 18)),
+              ),
+              // 🎯 右上角全選與全不選智慧控制元件
+              Tooltip(
+                message: isAllSelected ? '取消全選' : '全選所有行程',
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.playlist_add_check_rounded,
-                        color: Color(0xFF203764), size: 28),
-                    const SizedBox(width: 8),
-                    const Text('選擇欲導入的待辦事項',
-                        style: TextStyle(
-                            fontWeight: FontWeight.bold, fontSize: 18)),
+                    Text(isAllSelected ? '取消全選' : '全選', 
+                        style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
+                    Checkbox(
+                      activeColor: const Color(0xFF203764),
+                      value: isAllSelected,
+                      onChanged: (bool? checked) {
+                        // 🎯 切換全部狀態：連動更新所有任務的勾選標記
+                        setDialogState(() {
+                          for (int i = 0; i < selectedFlags.length; i++) {
+                            selectedFlags[i] = checked ?? false;
+                          }
+                        });
+                      },
+                    ),
                   ],
                 ),
-                content: SizedBox(
-                  width: double.maxFinite,
-                  height: 350,
-                  child: ListView.builder(
-                    itemCount: incomingEvents.length,
-                    itemBuilder: (context, index) {
-                      final event = incomingEvents[index];
-                      DateTime parsedTime =
-                          DateTime.parse(event['startTime']);
-                      String formattedTime =
-                          "${parsedTime.month}/${parsedTime.day} "
-                          "${parsedTime.hour.toString().padLeft(2, '0')}:"
-                          "${parsedTime.minute.toString().padLeft(2, '0')}";
+              ),
+            ],
+          ),
+          content: SizedBox(
+            width: double.maxFinite,
+            height: 350,
+            child: ListView.builder(
+              itemCount: incomingEvents.length,
+              itemBuilder: (context, index) {
+                final event = incomingEvents[index];
+                DateTime parsedTime =
+                    DateTime.parse(event['startTime']);
+                String formattedTime =
+                    "${parsedTime.month}/${parsedTime.day} "
+                    "${parsedTime.hour.toString().padLeft(2, '0')}:"
+                    "${parsedTime.minute.toString().padLeft(2, '0')}";
 
-                      return Container(
-                        margin: const EdgeInsets.only(bottom: 8),
-                        decoration: BoxDecoration(
-                          color: Colors.grey.shade50,
-                          borderRadius: BorderRadius.circular(12),
-                          border:
-                              Border.all(color: Colors.grey.shade200),
-                        ),
-                        child: CheckboxListTile(
-                          activeColor: const Color(0xFF203764),
-                          contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 4),
-                          title: Text(
-                            event['title'],
-                            style: const TextStyle(
-                                fontWeight: FontWeight.w600, fontSize: 14),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          subtitle: Text(
-                            '📅 時間: $formattedTime\n📝 備註: ${event['note']}',
-                            style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.grey.shade700,
-                                height: 1.5),
-                          ),
-                          isThreeLine: true,
-                          value: selectedFlags[index],
-                          onChanged: (bool? value) {
-                            setDialogState(() {
-                              selectedFlags[index] = value ?? false;
-                            });
-                          },
-                        ),
-                      );
-                    },
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                    border:
+                        Border.all(color: Colors.grey.shade200),
                   ),
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(dialogContext),
-                    child: const Text('取消',
-                        style: TextStyle(
-                            color: Colors.grey,
-                            fontWeight: FontWeight.w500)),
-                  ),
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF203764),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 8),
+                  child: CheckboxListTile(
+                    activeColor: const Color(0xFF203764),
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 4),
+                    title: Text(
+                      event['title'],
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w600, fontSize: 14),
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    onPressed: () async {
-                      int importCount = 0;
-                      try {
-                        final String currentUserId =
-                            _currentUser?.uid ?? '';
-
-                        for (int i = 0; i < incomingEvents.length; i++) {
-                          if (selectedFlags[i]) {
-                            final targetEvent = incomingEvents[i];
-
-                            // 同名同天防重複：找手動建立但缺 googleEventId 的任務
-                            final titleCheck = await FirebaseFirestore
-                                .instance
-                                .collection('todos')
-                                // ✅ 修正 4：改用 assignedTo 查詢，與 _buildTodoQuery 對齊
-                                .where('assignedTo', isEqualTo: currentUserId)
-                                .where('title',
-                                    isEqualTo: targetEvent['title'])
-                                .get();
-
-                            QueryDocumentSnapshot? localMatchDoc;
-                            for (var doc in titleCheck.docs) {
-                                  final data = doc.data();
-                              if (data['startTime']
-                                      ?.toString()
-                                      .substring(0, 10) ==
-                                  targetEvent['startTime']
-                                      .toString()
-                                      .substring(0, 10)) {
-                                localMatchDoc = doc;
-                                break;
-                              }
-                            }
-
-                            if (localMatchDoc != null) {
-                              // 情況 A：補綁 googleEventId
-                              // ✅ 修正 4：同時補上 assignedTo 確保欄位完整
-                              await FirebaseFirestore.instance
-                                  .collection('todos')
-                                  .doc(localMatchDoc.id)
-                                  .update({
-                                'googleEventId':
-                                    targetEvent['googleEventId'],
-                                'assignedTo': currentUserId,
-                              });
-                              print(
-                                  "🔗 成功融合！已為手動任務 [${targetEvent['title']}] 綁定 GoogleCalendar 憑證。");
-                            } else {
-                              // 情況 B：全新行程直接寫入
-                              await FirebaseFirestore.instance
-                                  .collection('todos')
-                                  .add({
-                                ...targetEvent,
-                                'assignedTo': currentUserId,
-                                'createdAt': FieldValue.serverTimestamp(),
-                              });
-                            }
-                            importCount++;
-                          }
-                        }
-
-                        Navigator.pop(dialogContext);
-
-                        if (!mounted) return;
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                                '🎉 同步大成功！已完美對齊並導入 $importCount 筆行程！'),
-                            backgroundColor: const Color(0xFF203764),
-                          ),
-                        );
-                      } catch (err) {
-                        Navigator.pop(dialogContext);
-                        if (!mounted) return;
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                              content: Text('❌ 寫入資料庫失敗: $err'),
-                              backgroundColor: Colors.red),
-                        );
-                      }
-                      // ✅ 修正 1：移除對話框內的 finally setState，
-                      // 改由外層 finally 統一重置 _isSyncing
+                    subtitle: Text(
+                      '📅 時間: $formattedTime\n📝 備註: ${event['note']}',
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey.shade700,
+                          height: 1.5),
+                    ),
+                    isThreeLine: true,
+                    value: selectedFlags[index],
+                    onChanged: (bool? value) {
+                      setDialogState(() {
+                        selectedFlags[index] = value ?? false;
+                      });
                     },
-                    child: const Text('確認導入',
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold)),
                   ),
-                ],
-              );
-            },
-          );
-        },
-      );
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('取消',
+                  style: TextStyle(
+                      color: Colors.grey,
+                      fontWeight: FontWeight.w500)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF203764),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 16, vertical: 8),
+              ),
+              onPressed: () async {
+                int importCount = 0;
+                try {
+                  final String currentUserId =
+                      _currentUser?.uid ?? '';
+
+                  for (int i = 0; i < incomingEvents.length; i++) {
+                    if (selectedFlags[i]) {
+                      final targetEvent = incomingEvents[i];
+
+                      final titleCheck = await FirebaseFirestore
+                          .instance
+                          .collection('todos')
+                          .where('assignedTo', isEqualTo: currentUserId)
+                          .where('title',
+                              isEqualTo: targetEvent['title'])
+                          .get();
+
+                      QueryDocumentSnapshot? localMatchDoc;
+                      for (var doc in titleCheck.docs) {
+                        final data = doc.data();
+                        if (data['startTime']
+                                ?.toString()
+                                .substring(0, 10) ==
+                            targetEvent['startTime']
+                                .toString()
+                                .substring(0, 10)) {
+                          localMatchDoc = doc;
+                          break;
+                        }
+                      }
+
+                      if (localMatchDoc != null) {
+                        await FirebaseFirestore.instance
+                            .collection('todos')
+                            .doc(localMatchDoc.id)
+                            .update({
+                          'googleEventId':
+                              targetEvent['googleEventId'],
+                          'assignedTo': currentUserId,
+                        });
+                        print(
+                            "🔗 成功融合！已為手動任務 [${targetEvent['title']}] 綁定 GoogleCalendar 憑證。");
+                      } else {
+                        await FirebaseFirestore.instance
+                            .collection('todos')
+                            .add({
+                          ...targetEvent,
+                          'assignedTo': currentUserId,
+                          'createdAt': FieldValue.serverTimestamp(),
+                        });
+                      }
+                      importCount++;
+                    }
+                  }
+
+                  Navigator.pop(dialogContext);
+
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                          '🎉 同步大成功！已完美對齊並導入 $importCount 筆行程！'),
+                      backgroundColor: const Color(0xFF203764),
+                    ),
+                  );
+                } catch (err) {
+                  Navigator.pop(dialogContext);
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                        content: Text('❌ 寫入資料庫失敗: $err'),
+                        backgroundColor: Colors.red),
+                  );
+                }
+              },
+              child: const Text('確認',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+      },
+    );
+  },
+);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -398,37 +420,29 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // ✅ 修正 3：完成任務時，若有 googleEventId 同步刪除 Google 行事曆行程
-  Future<void> _completeTodo(
-      String todoId, Map<String, dynamic> todo) async {
+Future<void> _completeTodo(String todoId, Map<String, dynamic> todo) async {
     final db = FirebaseFirestore.instance;
     final batch = db.batch();
 
+    // 1. 定義已完成任務在雲端的存放路徑
     final completedRef = db.collection('completedTodos').doc();
+    
+    // 🔒 鋼鐵核心：將原本任務的所有欄位（包含最關鍵的 googleEventId 印記）原封不動轉移過去！
     batch.set(completedRef, {
       ...todo,
       'originalTodoId': todoId,
-      'completedAt': FieldValue.serverTimestamp(),
+      'completedAt': FieldValue.serverTimestamp(), // 鎖上完成時間戳記
     });
 
+    // 2. 只從首頁的未完成 'todos' 集合中抹除
     batch.delete(db.collection('todos').doc(todoId));
 
+    // 3. ⚠️ 檢查重點：這裡绝对、千万不能呼叫 GoogleCalendarService().deleteEventFromGoogleCalendar() ⚠️
+    // 我們只做 Firestore 批次變更提交，完全不碰觸 Google API 的刪除指令！
     await batch.commit();
 
-    // ✅ 修正 3：Firestore 批次完成後，非同步刪除 Google 行事曆上對應行程
-    final String? googleEventId = todo['googleEventId'] as String?;
-    if (googleEventId != null && googleEventId.isNotEmpty) {
-      try {
-        await GoogleCalendarService()
-            .deleteEventFromGoogleCalendar(googleEventId);
-        print("【CalenBridge】✅ 任務完成，已同步移除 Google 行事曆行程：$googleEventId");
-      } catch (e) {
-        // Google 行事曆刪除失敗不阻斷主流程，僅 log 記錄
-        print("【CalenBridge】⚠️ Google 行事曆刪除失敗（不影響本地完成）: $e");
-      }
-    }
-
-    final text = _encouragements[
-        DateTime.now().millisecondsSinceEpoch % _encouragements.length];
+    // 4. 觸發完成後的彩蛋小提示
+    final text = _encouragements[DateTime.now().millisecondsSinceEpoch % _encouragements.length];
     if (mounted) {
       setState(() {
         _encouragementText = text;

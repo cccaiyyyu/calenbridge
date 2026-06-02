@@ -59,99 +59,94 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
 
   // ─── 2. 刪除小組 ──────────────────────────────────────────────
   Future<void> _deleteGroup() async {
-  final confirm = await showDialog<bool>(
-    context: context,
-    builder: (_) => AlertDialog(
-      title: const Text('確認刪除'),
-      content: Text('確定要刪除「${widget.groupName}」嗎？此操作無法復原。'),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context, false),
-          child: const Text('取消'),
-        ),
-        FilledButton(
-          style: FilledButton.styleFrom(backgroundColor: Colors.red),
-          onPressed: () => Navigator.pop(context, true),
-          child: const Text('刪除'),
-        ),
-      ],
-    ),
-  );
-  if (confirm != true) return;
-
-  final currentUid = _currentUser?.uid;
-  if (currentUid == null) return;
-
-  // ─── 檢查該小組內是否有自己未完成的任務 ──────────────────────
-  final myTodos = await db
-      .collection('todos')
-      .where('ownerUid', isEqualTo: currentUid)
-      .where('groupId', isEqualTo: widget.groupId)
-      .get();
-
-  if (myTodos.docs.isNotEmpty && mounted) {
-    // 有未完成任務，詢問是否移到個人
-    final moveToPersonal = await showDialog<bool>(
+    final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('你有未完成的任務'),
-        content: Text(
-          '此小組內有 ${myTodos.docs.length} 筆你的未完成任務，\n要移到個人待辦事項嗎？',
-        ),
+        title: const Text('確認刪除'),
+        content: Text('確定要刪除「${widget.groupName}」嗎？此操作無法復原。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('不用，直接刪除'),
+            child: const Text('取消'),
           ),
           FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('移到個人'),
+            child: const Text('刪除'),
           ),
         ],
       ),
     );
+    if (confirm != true) return;
 
-    if (moveToPersonal == true) {
-  // 把任務的 groupId 改成 personal，並把所有權全數收回給自己
-  final batch = db.batch();
-  final String currentUserId = _currentUser?.uid ?? ''; // 確保能拿到你當前的 UID
-  final String currentUserEmail = _currentUser?.email ?? ''; // 你的 Email
+    final currentUid = _currentUser?.uid;
+    if (currentUid == null) return;
 
-  for (final doc in myTodos.docs) {
-    batch.update(db.collection('todos').doc(doc.id), {
-      'groupId': 'personal',
-      
-      // 🔥 【核心修正】把這筆任務的主權強行改成你自己，這樣不論個人清單怎麼判斷，三個點都會出來！
-      'ownerUid': currentUserId, 
-      'assignedToUid': currentUserId, // 或者是 null，看你個人任務的預設值
-      'assignedTo': currentUserId,
-      'assignedToEmail': currentUserEmail, // 順便更正綁定的 Email
-    });
+    // ─── 檢查該小組內是否有自己未完成的任務 ──────────────────────
+    final myTodos = await db
+        .collection('todos')
+        .where('ownerUid', isEqualTo: currentUid)
+        .where('groupId', isEqualTo: widget.groupId)
+        .get();
+
+    if (myTodos.docs.isNotEmpty && mounted) {
+      final moveToPersonal = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('你有未完成的任務'),
+          content: Text(
+            '此小組內有 ${myTodos.docs.length} 筆你的未完成任務，\n要移到個人待辦事項嗎？',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('不用，直接刪除'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('移到個人'),
+            ),
+          ],
+        ),
+      );
+
+      if (moveToPersonal == true) {
+        final batch = db.batch();
+        final String currentUserId = _currentUser?.uid ?? ''; 
+        final String currentUserEmail = _currentUser?.email ?? ''; 
+
+        for (final doc in myTodos.docs) {
+          batch.update(db.collection('todos').doc(doc.id), {
+            'groupId': 'personal',
+            'ownerUid': currentUserId, 
+            'assignedToUid': currentUserId, 
+            'assignedTo': currentUserId,
+            'assignedToEmail': currentUserEmail, 
+          });
+        }
+        await batch.commit();
+      }
+    }
+
+    // ─── 刪除小組 ────────────────────────────────────────────────
+    final groupDoc = await db.collection('groups').doc(widget.groupId).get();
+    final groupData = groupDoc.data() as Map<String, dynamic>;
+    final List memberIds = groupData['memberIds'] ?? [];
+
+    final batch = db.batch();
+    for (final uid in memberIds) {
+      batch.update(db.collection('users').doc(uid), {
+        'groupIds': FieldValue.arrayRemove([widget.groupId]),
+      });
+    }
+    batch.delete(db.collection('groups').doc(widget.groupId));
+    await batch.commit();
+
+    if (mounted) {
+      _showSnack('小組已刪除');
+      Navigator.pop(context, true);
+    }
   }
-  await batch.commit();
-  print("【CalenBridge】群組任務已成功移回個人，且主權已全部重設為當前使用者。");
-}
-  }
-
-  // ─── 刪除小組 ────────────────────────────────────────────────
-  final groupDoc = await db.collection('groups').doc(widget.groupId).get();
-  final groupData = groupDoc.data() as Map<String, dynamic>;
-  final List memberIds = groupData['memberIds'] ?? [];
-
-  final batch = db.batch();
-  for (final uid in memberIds) {
-    batch.update(db.collection('users').doc(uid), {
-      'groupIds': FieldValue.arrayRemove([widget.groupId]),
-    });
-  }
-  batch.delete(db.collection('groups').doc(widget.groupId));
-  await batch.commit();
-
-  if (mounted) {
-    _showSnack('小組已刪除');
-    Navigator.pop(context, true);
-  }
-}
 
   // ─── 3. 增加組員 ──────────────────────────────────────────────
   Future<void> _addMember() async {
@@ -223,7 +218,7 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
     final groupDoc = await db.collection('groups').doc(widget.groupId).get();
     final groupData = groupDoc.data() as Map<String, dynamic>;
     final List memberIds = List.from(groupData['memberIds'] ?? []);
-    memberIds.remove(_currentUser?.uid); // 不能踢組長自己
+    memberIds.remove(_currentUser?.uid); 
 
     final List<Map<String, String>> members = [];
     for (final uid in memberIds) {
@@ -348,10 +343,9 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
                     {
                       'memberPermissions.${m['uid']}': {
                         'canAssignTask': m['canAssignTask']
-                      },
+                      }
                     },
                   );
-                  // 通知被更改權限的人
                   await db.collection('notifications').add({
                     'type': 'permissionChanged',
                     'toUserId': m['uid'],
@@ -382,18 +376,125 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Theme.of(context).colorScheme.surface,
       appBar: AppBar(
         title: Text(widget.groupName),
       ),
       body: ListView(
         children: [
           const SizedBox(height: 8),
+          // ─── 1. 編輯小組名稱 ─────────────────────────────────────
           ListTile(
             leading: const Icon(Icons.edit_rounded),
             title: const Text('編輯小組名稱'),
             onTap: _renameGroup,
           ),
           const Divider(indent: 16, endIndent: 16),
+          
+          // ─── 🎯 順序調整：已將「小組成員名單」成功移到「增加組員」的上方！ ───
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: Row(
+              children: [
+                Icon(Icons.groups_rounded, color: Theme.of(context).colorScheme.primary, size: 20),
+                const SizedBox(width: 8),
+                const Text(
+                  '小組成員名單',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                ),
+              ],
+            ),
+          ),
+          
+          // 實時雙重 StreamBuilder 成員監聽渲染區
+          StreamBuilder<DocumentSnapshot>(
+            stream: db.collection('groups').doc(widget.groupId).snapshots(),
+            builder: (context, groupSnapshot) {
+              if (groupSnapshot.connectionState == ConnectionState.waiting) {
+                return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: CircularProgressIndicator()));
+              }
+              if (!groupSnapshot.hasData || !groupSnapshot.data!.exists) {
+                return const SizedBox();
+              }
+
+              final groupData = groupSnapshot.data!.data() as Map<String, dynamic>;
+              final List memberIds = groupData['memberIds'] ?? [];
+
+              if (memberIds.isEmpty) {
+                return const Padding(
+                  padding: EdgeInsets.all(16.0),
+                  child: Text('目前小組內沒有成員', style: TextStyle(color: Colors.grey, fontSize: 13)),
+                );
+              }
+
+              return StreamBuilder<QuerySnapshot>(
+                stream: db.collection('users').where(FieldPath.documentId, whereIn: memberIds).snapshots(),
+                builder: (context, userSnapshot) {
+                  if (userSnapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: CircularProgressIndicator()));
+                  }
+                  if (!userSnapshot.hasData || userSnapshot.data!.docs.isEmpty) {
+                    return const SizedBox();
+                  }
+
+                  final usersDocs = userSnapshot.data!.docs;
+
+                  return ListView.builder(
+                    shrinkWrap: true, 
+                    physics: const NeverScrollableScrollPhysics(), 
+                    itemCount: usersDocs.length,
+                    itemBuilder: (context, index) {
+                      final userData = usersDocs[index].data() as Map<String, dynamic>;
+                      
+                      final String nickname = userData['nickname'] ?? userData['displayName'] ?? userData['name'] ?? '未設定暱稱';
+                      final String email = userData['email'] ?? '無 Email 資料';
+                      final String uid = usersDocs[index].id;
+
+                      return Card(
+                        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant.withOpacity(0.4)),
+                        ),
+                        child: ListTile(
+                          dense: true,
+                          leading: CircleAvatar(
+                            radius: 18,
+                            backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+                            child: Text(
+                              nickname.isNotEmpty ? nickname[0].toUpperCase() : '?',
+                              style: TextStyle(color: Theme.of(context).colorScheme.onPrimaryContainer, fontWeight: FontWeight.bold, fontSize: 13),
+                            ),
+                          ),
+                          title: Row(
+                            children: [
+                              Text(nickname, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                              if (uid == _currentUser?.uid) ...[
+                                const SizedBox(width: 8),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                                  decoration: BoxDecoration(
+                                    color: Theme.of(context).colorScheme.secondaryContainer,
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Text('我', style: TextStyle(fontSize: 9, color: Theme.of(context).colorScheme.onSecondaryContainer, fontWeight: FontWeight.bold)),
+                                ),
+                              ]
+                            ],
+                          ),
+                          subtitle: Text(email, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                        ),
+                      );
+                    },
+                  );
+                },
+              );
+            },
+          ),
+          
+          // ─── 下半部：功能操作按鈕群 ──────────────────────────────────
+          const Divider(indent: 16, endIndent: 16, height: 24),
           ListTile(
             leading: const Icon(Icons.person_add_rounded),
             title: const Text('增加組員'),
@@ -412,10 +513,10 @@ class _GroupManagementScreenState extends State<GroupManagementScreen> {
           const Divider(indent: 16, endIndent: 16),
           ListTile(
             leading: const Icon(Icons.delete_rounded, color: Colors.red),
-            title: const Text('刪除小組',
-                style: TextStyle(color: Colors.red)),
+            title: const Text('刪除小組', style: TextStyle(color: Colors.red)),
             onTap: _deleteGroup,
           ),
+          const SizedBox(height: 32),
         ],
       ),
     );

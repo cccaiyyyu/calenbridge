@@ -53,13 +53,13 @@ class NotificationScreen extends StatelessWidget {
       // 執行寫入
       await batch.commit();
       
-      // 🎯 2. 給資料庫一小段緩衝時間定位，防止 UI 瞬間倒流閃現
+      // 🎯 2. 给資料庫一小段緩衝時間定位，防止 UI 瞬間倒流閃現
       await Future.delayed(const Duration(milliseconds: 300));
 
     } catch (e) {
       print("【CalenBridge 通知】處理群組邀請失敗: $e");
     } finally {
-      // 🎯 3. 【關鍵修正】：不管成功或失敗，只要處理完畢，就一定要把轉圈圈關掉！
+      // 🎯 3. 不管成功或失敗，只要處理完畢，就一定要把轉圈圈關掉！
       if (context.mounted) {
         Navigator.pop(context); // 👈 關閉轉圈圈，讓畫面恢復正常
         
@@ -74,7 +74,7 @@ class NotificationScreen extends StatelessWidget {
     }
   }
 
- Future<void> _handleTaskAssign({
+  Future<void> _handleTaskAssign({
     required BuildContext context,
     required String notifId,
     required bool accepted,
@@ -82,7 +82,7 @@ class NotificationScreen extends StatelessWidget {
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser == null) return;
 
-    // 🎯 修正點 1：點擊瞬間立刻彈出轉圈圈，鎖定畫面防重複寫入
+    // 點擊瞬間立刻彈出轉圈圈，鎖定畫面防重複寫入
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -130,13 +130,13 @@ class NotificationScreen extends StatelessWidget {
 
       await batch.commit();
       
-      // 🎯 修正點 2：給資料庫一小段緩衝時間定位
+      // 給資料庫一小段緩衝時間定位
       await Future.delayed(const Duration(milliseconds: 300));
 
     } catch (e) {
       print("【CalenBridge 通知】指派任務失敗: $e");
     } finally {
-      // 🎯 修正點 3：安全關閉 Loading 遮罩
+      // 安全關閉 Loading 遮罩
       if (context.mounted) {
         Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
@@ -164,26 +164,26 @@ class NotificationScreen extends StatelessWidget {
     await batch.commit();
   }
 
- String _formatTime(BuildContext context, dynamic timestamp) {
-  if (timestamp == null) return '';
-  try {
-    final dt = (timestamp as Timestamp).toDate();
-    final now = DateTime.now();
-    final diff = now.difference(dt);
-    if (diff.inMinutes < 1) return '剛剛';
-    if (diff.inMinutes < 60) return '${diff.inMinutes} 分鐘前';
-    if (diff.inHours < 24) return '${diff.inHours} 小時前';
-    if (diff.inDays < 7) return '${diff.inDays} 天前';
-    return DateFormat('MM/dd').format(dt);
-  } catch (e) { // 1. 改成 (e) 才能抓到錯誤訊息
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('操作失敗: $e')),
-      );
+  String _formatTime(BuildContext context, dynamic timestamp) {
+    if (timestamp == null) return '';
+    try {
+      final dt = (timestamp as Timestamp).toDate();
+      final now = DateTime.now();
+      final diff = now.difference(dt);
+      if (diff.inMinutes < 1) return '剛剛';
+      if (diff.inMinutes < 60) return '${diff.inMinutes} 分鐘前';
+      if (diff.inHours < 24) return '${diff.inHours} 小時前';
+      if (diff.inDays < 7) return '${diff.inDays} 天前';
+      return DateFormat('MM/dd').format(dt);
+    } catch (e) { 
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('操作失敗: $e')),
+        );
+      }
+      return ''; 
     }
-    return ''; // 2. 補上這行！確保發生錯誤時也能回傳一個 String
   }
-}
 
   @override
   Widget build(BuildContext context) {
@@ -196,18 +196,74 @@ class NotificationScreen extends StatelessWidget {
         title: const Text('通知中心'),
         centerTitle: false,
         actions: [
+          // 🎯 按鈕一：全部已讀
           TextButton.icon(
             onPressed: () => _markAllAsRead(currentUser.uid),
             icon: const Icon(Icons.done_all_rounded, size: 18),
             label: const Text('全部已讀'),
           ),
+          
+          // 🎯 按鈕二：智慧確認清除歷史通知
+          TextButton.icon(
+            onPressed: () async {
+              final db = FirebaseFirestore.instance;
+              
+              // 先去檢查有沒有任何通知可以刪，沒通知直接 return
+              final userAllNotifs = await db
+                  .collection('notifications')
+                  .where('toUserId', isEqualTo: currentUser.uid)
+                  .get();
+
+              if (userAllNotifs.docs.isEmpty) return;
+
+              if (!context.mounted) return;
+
+              // 🚀 蹦出精美的確認小視窗
+              showDialog(
+                context: context,
+                builder: (dialogContext) {
+                  return AlertDialog(
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    title: const Text('確認清除', style: TextStyle(fontWeight: FontWeight.bold)),
+                    content: const Text('確定要清除通知中心內的所有通知紀錄嗎？此動作無法復原喔！'),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(dialogContext), // 點取消：直接關閉小視窗
+                        child: const Text('取消', style: TextStyle(color: Colors.grey)),
+                      ),
+                      ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.redAccent,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        ),
+                        onPressed: () async {
+                          Navigator.pop(dialogContext); // 先關閉小視窗
+                          
+                          // 默默發動大掃除
+                          final batch = db.batch();
+                          for (var doc in userAllNotifs.docs) {
+                            batch.delete(doc.reference);
+                          }
+                          await batch.commit();
+                        },
+                        child: const Text('確定刪除', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                      ),
+                    ],
+                  );
+                },
+              );
+            },
+            icon: const Icon(Icons.delete_sweep_rounded, size: 18, color: Colors.redAccent),
+            label: const Text('全部清除', style: TextStyle(color: Colors.redAccent)),
+          ),
+          const SizedBox(width: 8),
         ],
       ),
       body: StreamBuilder<QuerySnapshot>(
         stream: FirebaseFirestore.instance
-          .collection('notifications')
-          .where('toUserId', isEqualTo: currentUser.uid)
-          .snapshots(),
+            .collection('notifications')
+            .where('toUserId', isEqualTo: currentUser.uid)
+            .snapshots(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
@@ -236,90 +292,89 @@ class NotificationScreen extends StatelessWidget {
             );
           }
 
-          // 1. 先在 ListView 建立前就把資料複製並排序好，避免滾動時重複排序造成卡頓
-final sortedDocs = List.from(snapshot.data!.docs);
-sortedDocs.sort((a, b) {
-  final aTime = (a.data() as Map<String, dynamic>)['createdAt'];
-  final bTime = (b.data() as Map<String, dynamic>)['createdAt'];
-  if (aTime == null) return 1;
-  if (bTime == null) return -1;
-  return (bTime as Timestamp).compareTo(aTime as Timestamp);
-});
+          // 1. 先在 ListView 建立前就把資料複製並排序好
+          final sortedDocs = List.from(snapshot.data!.docs);
+          sortedDocs.sort((a, b) {
+            final aTime = (a.data() as Map<String, dynamic>)['createdAt'];
+            final bTime = (b.data() as Map<String, dynamic>)['createdAt'];
+            if (aTime == null) return 1;
+            if (bTime == null) return -1;
+            return (bTime as Timestamp).compareTo(aTime as Timestamp);
+          });
 
-return ListView.builder(
-  padding: const EdgeInsets.symmetric(vertical: 8),
-  itemCount: sortedDocs.length, 
-  itemBuilder: (context, index) {
-    final notif = sortedDocs[index].data() as Map<String, dynamic>;
-    final notifId = sortedDocs[index].id;
-    
-    final isRead = notif['isRead'] ?? false;
-    final status = notif['status'] ?? 'pending';
-    final isPending = status == 'pending';
-    final type = notif['type'] ?? '';
-    
-    final timeStr = _formatTime(context, notif['createdAt']);
-    
-    return _NotificationTile(
-      isRead: isRead,
-      isPending: isPending,
-      status: status,
-      type: type,
-      notif: notif,
-      timeStr: timeStr,
-      onAccept: () {
-        if (type == 'taskAssigned') {
-          _handleTaskAssign(
-            context: context,
-            notifId: notifId,
-            accepted: true,
+          return ListView.builder(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            itemCount: sortedDocs.length, 
+            itemBuilder: (context, index) {
+              final notif = sortedDocs[index].data() as Map<String, dynamic>;
+              final notifId = sortedDocs[index].id;
+              
+              final isRead = notif['isRead'] ?? false;
+              final status = notif['status'] ?? 'pending';
+              final isPending = status == 'pending';
+              final type = notif['type'] ?? '';
+              
+              final timeStr = _formatTime(context, notif['createdAt']);
+              
+              return _NotificationTile(
+                isRead: isRead,
+                isPending: isPending,
+                status: status,
+                type: type,
+                notif: notif,
+                timeStr: timeStr,
+                onAccept: () {
+                  if (type == 'taskAssigned') {
+                    _handleTaskAssign(
+                      context: context,
+                      notifId: notifId,
+                      accepted: true,
+                    );
+                  } else {
+                    _handleNotificationAction(
+                      context: context,
+                      notifId: notifId,
+                      groupId: notif['groupId'] ?? '',
+                      groupName: notif['groupName'] ?? '',
+                      canAssignTask: notif['canAssignTask'] ?? false,
+                      accepted: true,
+                    );
+                  }
+                },
+                onReject: () {
+                  if (type == 'taskAssigned') {
+                    _handleTaskAssign(
+                      context: context,
+                      notifId: notifId,
+                      accepted: false,
+                    );
+                  } else {
+                    _handleNotificationAction(
+                      context: context,
+                      notifId: notifId,
+                      groupId: notif['groupId'] ?? '',
+                      groupName: notif['groupName'] ?? '',
+                      canAssignTask: notif['canAssignTask'] ?? false,
+                      accepted: false,
+                    );
+                  }
+                },
+                onTap: isRead
+                    ? null
+                    : () {
+                        FirebaseFirestore.instance
+                            .collection('notifications')
+                            .doc(notifId)
+                            .update({'isRead': true});
+                      },
+              ); 
+            }, 
           );
-        } else {
-          _handleNotificationAction(
-            context: context,
-            notifId: notifId,
-            groupId: notif['groupId'] ?? '',
-            groupName: notif['groupName'] ?? '',
-            canAssignTask: notif['canAssignTask'] ?? false,
-            accepted: true,
-          );
-        }
-      },
-      onReject: () {
-        if (type == 'taskAssigned') {
-          _handleTaskAssign(
-            context: context,
-            notifId: notifId,
-            accepted: false,
-          );
-        } else {
-          _handleNotificationAction(
-            context: context,
-            notifId: notifId,
-            groupId: notif['groupId'] ?? '',
-            groupName: notif['groupName'] ?? '',
-            canAssignTask: notif['canAssignTask'] ?? false,
-            accepted: false,
-          );
-        }
-      },
-      onTap: isRead
-          ? null
-          : () {
-              FirebaseFirestore.instance
-                  .collection('notifications')
-                  .doc(notifId)
-                  .update({'isRead': true});
-            },
-    ); 
-  }, 
-);
         },
       ),
     );
   }
 }
-
 
 class _NotificationTile extends StatelessWidget {
   final bool isRead;
