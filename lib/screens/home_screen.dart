@@ -1181,170 +1181,113 @@ class _HomeScreenState extends State<HomeScreen> {
     
   }
   Future<void> _showExitGroupDialog(BuildContext context, String groupId) async {
-    final currentUser = FirebaseAuth.instance.currentUser;
-    if (currentUser == null) return;
-    final db = FirebaseFirestore.instance;
+  final currentUser = FirebaseAuth.instance.currentUser;
+  if (currentUser == null) return;
+  final db = FirebaseFirestore.instance;
 
-    // 1. 顯示載入圈圈
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const Center(child: CircularProgressIndicator(color: Color(0xFF203764))),
-    );
+  // 顯示載入框
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (context) => const Center(child: CircularProgressIndicator(color: Color(0xFF203764))),
+  );
 
-    try {
-      // 抓取小組資訊
-      final groupDoc = await db.collection('groups').doc(groupId).get();
-      if (context.mounted) Navigator.pop(context); // 關閉載入圈圈
+  try {
+    final groupDoc = await db.collection('groups').doc(groupId).get();
+    
+    // 檢查確認後，關閉載入框
+    if (Navigator.canPop(context)) Navigator.pop(context);
 
-      if (!groupDoc.exists) return;
+    if (!groupDoc.exists) return;
 
-      final groupData = groupDoc.data() as Map<String, dynamic>;
-      final String creatorUid = groupData['creatorUid'] ?? ''; 
-      final String groupName = groupData['name'] ?? '此小組';
+    final groupData = groupDoc.data() as Map<String, dynamic>;
+    final String creatorUid = groupData['creatorUid'] ?? ''; 
+    final String groupName = groupData['name'] ?? '此小組';
 
-      // 安全檢查：建立者不能退出
-      if (currentUser.uid == creatorUid) {
-        if (context.mounted) {
-          showDialog(
-            context: context,
-            builder: (context) => AlertDialog(
-              title: const Text('無法退出'),
-              content: Text('你是「$groupName」的建立者，無法直接退出！若要解散請點擊小組旁的設定。'),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('我知道了'),
-                ),
-              ],
-            ),
-          );
-        }
-        return;
-      }
-
-      // 2. 第一階段：確認是否退出小組
-      if (context.mounted) {
-        final bool? confirmExit = await showDialog<bool>(
-          context: context,
-          builder: (dialogContext) => AlertDialog(
-            title: const Text('退出小組確認'),
-            content: Text('你確定要退出小組「$groupName」嗎？\n退出後將無法查看此小組的任何資訊。'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext, false),
-                child: const Text('取消', style: TextStyle(color: Colors.grey)),
-              ),
-              FilledButton(
-                style: FilledButton.styleFrom(backgroundColor: Colors.red),
-                onPressed: () => Navigator.pop(dialogContext, true),
-                child: const Text('確認退出'),
-              ),
-            ],
-          ),
-        );
-
-        // 如果點取消或點外面關閉，直接結束
-        if (confirmExit != true) return;
-      }
-
-      // 3. 第二階段：檢查該使用者在此小組內是否有「未完成的待辦事項」
-      // 💡 註：請確認你的 Firestore todos 欄位名稱是否為 groupId, assigneeId, isCompleted
-      final todoQuery = await db.collection('todos')
-                .where('groupId', isEqualTo: groupId)
-                .where('assigneeId', isEqualTo: currentUser.uid)
-                .where('isCompleted', isEqualTo: false)
-
-          .get();
-
-      bool migrateToPersonal = false;
-
-      // 如果有未完成的待辦事項，跳出詢問移轉對話框
-      if (todoQuery.docs.isNotEmpty && context.mounted) {
-        final int todoCount = todoQuery.docs.length;
-        
-        final String? actionResult = await showDialog<String>(
-          context: context,
-          barrierDismissible: false, // 強迫選擇
-          builder: (dialogContext) => AlertDialog(
-            title: const Text('移轉待辦事項'),
-            content: Text('偵測到你在「$groupName」中還有 $todoCount 項「未完成」的待辦事項。\n\n請問需要將這些事項移轉到你的「個人待辦事項」中嗎？'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext, 'leave'),
-                child: const Text('不用，留在小組', style: TextStyle(color: Colors.red)),
-              ),
-              FilledButton(
-                style: FilledButton.styleFrom(backgroundColor: const Color(0xFF203764)),
-                onPressed: () => Navigator.pop(dialogContext, 'migrate'),
-                child: const Text('要，移轉至個人'),
-              ),
-            ],
-          ),
-        );
-
-        if (actionResult == 'migrate') {
-          migrateToPersonal = true;
-        }
-      }
-
-      // 4. 第三階段：處理資料庫變更
+    if (currentUser.uid == creatorUid) {
       if (context.mounted) {
         showDialog(
           context: context,
-          barrierDismissible: false,
-          builder: (context) => const Center(child: CircularProgressIndicator(color: Color(0xFF203764))),
+          builder: (context) => AlertDialog(
+            title: const Text('無法退出'),
+            content: Text('你是「$groupName」的建立者，無法直接退出！'),
+            actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('我知道了'))],
+          ),
         );
       }
+      return;
+    }
 
-      final batch = db.batch();
+    // 1. 確認退出視窗
+    final bool? confirmExit = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('退出小組確認'),
+        content: Text('你確定要退出小組「$groupName」嗎？'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('取消')),
+          FilledButton(style: FilledButton.styleFrom(backgroundColor: Colors.red), onPressed: () => Navigator.pop(dialogContext, true), child: const Text('確認退出')),
+        ],
+      ),
+    );
+    if (confirmExit != true) return;
 
-      // 如果使用者有未完成事項
-      if (todoQuery.docs.isNotEmpty) {
-        if (migrateToPersonal) {
-          // 選擇移轉：更新 groupId 為 'personal'
-          for (var doc in todoQuery.docs) {
-            batch.update(doc.reference, {'groupId': 'personal'});
-          }
+    // 2. 檢查任務
+    final todoQuery = await db.collection('todos')
+    .where('groupId', isEqualTo: groupId)
+    .where('ownerUid', isEqualTo: currentUser.uid)
+    .get();
+      print("Debug: 找到任務數量為 ${todoQuery.docs.length}");
+print("Debug: 小組 ID 為 $groupId");
+print("Debug: 使用者 ID 為 ${currentUser.uid}");
+    String? actionResult = 'none';
+
+    if (todoQuery.docs.isNotEmpty) {
+      actionResult = await showDialog<String>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('移轉待辦事項'),
+          content: Text('偵測到你有 ${todoQuery.docs.length} 項未完成任務，要移轉至個人嗎？'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialogContext, 'leave'), child: const Text('刪除任務', style: TextStyle(color: Colors.red))),
+            FilledButton(style: FilledButton.styleFrom(backgroundColor: const Color(0xFF203764)), onPressed: () => Navigator.pop(dialogContext, 'migrate'), child: const Text('移轉至個人')),
+          ],
+        ),
+      );
+    }
+
+    // 3. 執行批次操作 (合併所有變更，只 commit 一次)
+    final batch = db.batch();
+
+    if (todoQuery.docs.isNotEmpty) {
+      for (var doc in todoQuery.docs) {
+        if (actionResult == 'migrate') {
+          batch.update(doc.reference, {'groupId': 'personal', 'ownerUid': currentUser.uid});
         } else {
-          // 選擇不移轉：直接刪除這些未完成的事項
-          for (var doc in todoQuery.docs) {
-            batch.delete(doc.reference);
-          }
+          batch.update(doc.reference, {'groupId': 'archived_deleted', 'isCompleted': true});
         }
       }
-
-      // 執行退出群組邏輯
-      batch.update(db.collection('groups').doc(groupId), {
-        'memberIds': FieldValue.arrayRemove([currentUser.uid]),
-      });
-      batch.update(db.collection('users').doc(currentUser.uid), {
-        'groupIds': FieldValue.arrayRemove([groupId]),
-      });
-
-      await batch.commit();
-
-      if (context.mounted) Navigator.pop(context); // 關閉載入圈圈
-
-      setState(() => _isLoadingGroups = true);
-      await _fetchUserGroups();
-
-      // 5. 提示訊息
-      if (context.mounted) {
-        String successMsg = migrateToPersonal 
-            ? '已退出小組，並將未完成事項移至個人項目。' 
-            : '已退出小組，並刪除了你在該組內未完成的任務。';
-            
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(successMsg), behavior: SnackBarBehavior.floating),
-        );
-      }
-    } catch (e) {
-      // 發生任何錯誤時的保險關對話框機制
-      if (context.mounted) Navigator.pop(context);
-      print("退出群組或移轉事項失敗: $e");
     }
+
+    batch.update(db.collection('groups').doc(groupId), {'memberIds': FieldValue.arrayRemove([currentUser.uid])});
+    batch.update(db.collection('users').doc(currentUser.uid), {'groupIds': FieldValue.arrayRemove([groupId])});
+
+    await batch.commit();
+
+    // 4. 完成後刷新
+    setState(() => _isLoadingGroups = true);
+    await _fetchUserGroups();
+
+    if (context.mounted) {
+      String successMsg = actionResult == 'migrate' ? '已退出小組並移轉任務。' : '已退出小組並封存任務。';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(successMsg)));
+    }
+  } catch (e) {
+    if (Navigator.canPop(context)) Navigator.pop(context);
+    print("退出群組失敗: $e");
   }
+}
   // ... 這裡是你 HomeScreen 裡面原本就有的其他各種 method (例如 _buildTodoQuery 或是 _fetchUserGroups)
 
   // =========================================================
