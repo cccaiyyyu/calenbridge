@@ -375,7 +375,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return query;
   }
-
+  
+  
   void _openTodoBottomSheet(
       {String? todoId, Map<String, dynamic>? initialData}) {
     showModalBottomSheet(
@@ -526,42 +527,85 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
       ),
-      if (_isReordering)
-        SizedBox(
-          height: groups.length * 48.0,
-          child: ReorderableListView(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            onReorder: (oldIndex, newIndex) {
+      
+      // ✏️ 當點擊「那支筆」進入編輯模式時
+      if (_isReordering) ...[
+        ...List.generate(groups.length, (index) {
+          final group = groups[index];
+          final groupId = group['id']!;
+          final groupName = group['name']!;
+
+          // 封裝一模一樣的標準 ListTile
+          Widget buildGroupTile({bool isFeedback = false}) {
+            return ListTile(
+              dense: true,
+              // 如果是跟著滑鼠跑的實體，文字可以加粗，看起來更有「抓起來」的質感
+              leading: const Icon(Icons.drag_handle_rounded, size: 20, color: Colors.grey),
+              title: Text(
+                groupName, 
+                style: TextStyle(
+                  fontSize: 13, 
+                  fontWeight: isFeedback ? FontWeight.bold : FontWeight.normal,
+                  decoration: TextDecoration.none, // 防止 Web 端跑出黃色底線
+                  color: Colors.black,
+                )
+              ),
+            );
+          }
+
+          return DragTarget<String>(
+            onWillAcceptWithDetails: (details) => details.data != groupId,
+            onAcceptWithDetails: (details) {
+              final draggedId = details.data;
               setState(() {
-                if (newIndex > oldIndex) newIndex--;
                 final allGroups = _groupTabs
-                    .where(
-                        (t) => t['id'] != 'all' && t['id'] != 'personal')
+                    .where((t) => t['id'] != 'all' && t['id'] != 'personal')
                     .toList();
-                final movedGroup = allGroups.removeAt(oldIndex);
-                allGroups.insert(newIndex, movedGroup);
-                _groupTabs = [
-                  {"id": "all", "name": "所有"},
-                  {"id": "personal", "name": "個人"},
-                  ...allGroups,
-                ];
+                
+                final oldIdx = allGroups.indexWhere((t) => t['id'] == draggedId);
+                final newIdx = allGroups.indexWhere((t) => t['id'] == groupId);
+                
+                if (oldIdx != -1 && newIdx != -1) {
+                  final movedGroup = allGroups.removeAt(oldIdx);
+                  allGroups.insert(newIdx, movedGroup);
+                  _groupTabs = [
+                    {"id": "all", "name": "所有"},
+                    {"id": "personal", "name": "個人"},
+                    ...allGroups,
+                  ];
+                }
               });
             },
-            children: groups.map((group) {
-              final groupId = group['id']!;
-              final groupName = group['name']!;
-              return ListTile(
-                key: ValueKey(groupId),
-                dense: true,
-                leading: const Icon(Icons.drag_handle_rounded,
-                    size: 20, color: Colors.grey),
-                title: Text(groupName,
-                    style: const TextStyle(fontSize: 13)),
+            builder: (context, candidateData, rejectedData) {
+              return Draggable<String>(
+                data: groupId,
+                
+                // 🎯【跟著游標跑的實體】：把整塊清單直接拔走！使用 Material 確保擁有白色實體背景，絕無灰色影子
+                feedback: Material(
+                  elevation: 4, // 加上一點點陰影，讓它看起來真的浮在空中
+                  color: Colors.white, // 與你的側邊欄背景一樣是純白實心
+                  borderRadius: BorderRadius.circular(4),
+                  child: SizedBox(
+                    width: 200, // 限制寬度跟側邊欄差不多，拖曳時才不會散開
+                    child: buildGroupTile(isFeedback: true),
+                  ),
+                ),
+                
+                // 🎯【拔走後，留在原地的外觀】：設為完全透明的空間，這樣就不會有殘留分身
+                childWhenDragging: Opacity(
+                  opacity: 0.0,
+                  child: buildGroupTile(),
+                ),
+                
+                // 平常沒有拖曳時顯示的外觀（限定按住左邊兩條線才能拖）
+                child: buildGroupTile(),
               );
-            }).toList(),
-          ),
-        )
+            },
+          );
+        }).toList(),
+      ]
+      
+      // 🔓 平常正常狀態（沒點筆時）：維持最原本的樣子
       else
         ...groups.map((group) {
           final groupId = group['id']!;
@@ -581,14 +625,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
               return ListTile(
                 dense: true,
-                leading:
-                    const Icon(Icons.group_rounded, size: 20),
-                title: Text(groupName,
-                    style: const TextStyle(fontSize: 13)),
+                leading: const Icon(Icons.group_rounded, size: 20),
+                title: Text(groupName, style: const TextStyle(fontSize: 13)),
                 trailing: isCreator
                     ? IconButton(
-                        icon: const Icon(Icons.more_vert_rounded,
-                            size: 16, color: Colors.grey),
+                        icon: const Icon(Icons.more_vert_rounded, size: 16, color: Colors.grey),
                         onPressed: () async {
                           final result = await Navigator.push<bool>(
                             context,
@@ -600,8 +641,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           );
                           if (result == true) {
-                            setState(
-                                () => _isLoadingGroups = true);
+                            setState(() => _isLoadingGroups = true);
                             await _fetchUserGroups();
                           }
                         },
@@ -618,8 +658,8 @@ class _HomeScreenState extends State<HomeScreen> {
           );
         }).toList(),
     ];
-  }
-
+}
+  
   Widget _buildUnreadBadge(Widget child) {
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
@@ -679,7 +719,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
-
+  
   Widget _buildAvatar({double radius = 22}) {
     if (_avatarUrl.isNotEmpty && _avatarUrl.startsWith('data:image')) {
       final base64Str = _avatarUrl.split(',').last;
@@ -830,7 +870,9 @@ class _HomeScreenState extends State<HomeScreen> {
             },
           ),
           ..._buildGroupList(),
+         
           const Divider(indent: 16, endIndent: 16),
+           _buildTrashTarget(),
           const SizedBox(height: 24),
           const Divider(indent: 16, endIndent: 16),
           ListTile(
@@ -854,7 +896,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
-
+  
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -983,7 +1025,25 @@ class _HomeScreenState extends State<HomeScreen> {
                                 );
                               }
 
-                              final todos = snapshot.data!.docs;
+                              // 🎯 ✨【核心排序修正點 1】：將快照資料轉為可排序的複製列表
+                              final todos = List.from(snapshot.data!.docs);
+
+                              // 🎯 ✨【核心排序修正點 2】：進行時間升序排序（5號 -> 6號 -> 7號）
+                              todos.sort((a, b) {
+                                final aData = a.data() as Map<String, dynamic>;
+                                final bData = b.data() as Map<String, dynamic>;
+
+                                // 取得各自的開始時間 (如果沒有欄位，預設為空字串)
+                                final String aTime = aData['startTime']?.toString() ?? '';
+                                final String bTime = bData['startTime']?.toString() ?? '';
+
+                                // 防呆處理：沒有設定時間的事項往後排
+                                if (aTime.isEmpty) return 1;
+                                if (bTime.isEmpty) return -1;
+
+                                // ISO 8601 格式字串直接比大小，結果等同於時間排序
+                                return aTime.compareTo(bTime);
+                              });
 
                               return ListView.builder(
                                 itemCount: todos.length,
@@ -1118,5 +1178,237 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
     );
+    
   }
-}
+  Future<void> _showExitGroupDialog(BuildContext context, String groupId) async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return;
+    final db = FirebaseFirestore.instance;
+
+    // 1. 顯示載入圈圈
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator(color: Color(0xFF203764))),
+    );
+
+    try {
+      // 抓取小組資訊
+      final groupDoc = await db.collection('groups').doc(groupId).get();
+      if (context.mounted) Navigator.pop(context); // 關閉載入圈圈
+
+      if (!groupDoc.exists) return;
+
+      final groupData = groupDoc.data() as Map<String, dynamic>;
+      final String creatorUid = groupData['creatorUid'] ?? ''; 
+      final String groupName = groupData['name'] ?? '此小組';
+
+      // 安全檢查：建立者不能退出
+      if (currentUser.uid == creatorUid) {
+        if (context.mounted) {
+          showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('無法退出'),
+              content: Text('你是「$groupName」的建立者，無法直接退出！若要解散請點擊小組旁的設定。'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('我知道了'),
+                ),
+              ],
+            ),
+          );
+        }
+        return;
+      }
+
+      // 2. 第一階段：確認是否退出小組
+      if (context.mounted) {
+        final bool? confirmExit = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('退出小組確認'),
+            content: Text('你確定要退出小組「$groupName」嗎？\n退出後將無法查看此小組的任何資訊。'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('取消', style: TextStyle(color: Colors.grey)),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text('確認退出'),
+              ),
+            ],
+          ),
+        );
+
+        // 如果點取消或點外面關閉，直接結束
+        if (confirmExit != true) return;
+      }
+
+      // 3. 第二階段：檢查該使用者在此小組內是否有「未完成的待辦事項」
+      // 💡 註：請確認你的 Firestore todos 欄位名稱是否為 groupId, assigneeId, isCompleted
+      final todoQuery = await db.collection('todos')
+                .where('groupId', isEqualTo: groupId)
+                .where('assigneeId', isEqualTo: currentUser.uid)
+                .where('isCompleted', isEqualTo: false)
+
+          .get();
+
+      bool migrateToPersonal = false;
+
+      // 如果有未完成的待辦事項，跳出詢問移轉對話框
+      if (todoQuery.docs.isNotEmpty && context.mounted) {
+        final int todoCount = todoQuery.docs.length;
+        
+        final String? actionResult = await showDialog<String>(
+          context: context,
+          barrierDismissible: false, // 強迫選擇
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('移轉待辦事項'),
+            content: Text('偵測到你在「$groupName」中還有 $todoCount 項「未完成」的待辦事項。\n\n請問需要將這些事項移轉到你的「個人待辦事項」中嗎？'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, 'leave'),
+                child: const Text('不用，留在小組', style: TextStyle(color: Colors.red)),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: const Color(0xFF203764)),
+                onPressed: () => Navigator.pop(dialogContext, 'migrate'),
+                child: const Text('要，移轉至個人'),
+              ),
+            ],
+          ),
+        );
+
+        if (actionResult == 'migrate') {
+          migrateToPersonal = true;
+        }
+      }
+
+      // 4. 第三階段：處理資料庫變更
+      if (context.mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => const Center(child: CircularProgressIndicator(color: Color(0xFF203764))),
+        );
+      }
+
+      final batch = db.batch();
+
+      // 如果使用者有未完成事項
+      if (todoQuery.docs.isNotEmpty) {
+        if (migrateToPersonal) {
+          // 選擇移轉：更新 groupId 為 'personal'
+          for (var doc in todoQuery.docs) {
+            batch.update(doc.reference, {'groupId': 'personal'});
+          }
+        } else {
+          // 選擇不移轉：直接刪除這些未完成的事項
+          for (var doc in todoQuery.docs) {
+            batch.delete(doc.reference);
+          }
+        }
+      }
+
+      // 執行退出群組邏輯
+      batch.update(db.collection('groups').doc(groupId), {
+        'memberIds': FieldValue.arrayRemove([currentUser.uid]),
+      });
+      batch.update(db.collection('users').doc(currentUser.uid), {
+        'groupIds': FieldValue.arrayRemove([groupId]),
+      });
+
+      await batch.commit();
+
+      if (context.mounted) Navigator.pop(context); // 關閉載入圈圈
+
+      setState(() => _isLoadingGroups = true);
+      await _fetchUserGroups();
+
+      // 5. 提示訊息
+      if (context.mounted) {
+        String successMsg = migrateToPersonal 
+            ? '已退出小組，並將未完成事項移至個人項目。' 
+            : '已退出小組，並刪除了你在該組內未完成的任務。';
+            
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(successMsg), behavior: SnackBarBehavior.floating),
+        );
+      }
+    } catch (e) {
+      // 發生任何錯誤時的保險關對話框機制
+      if (context.mounted) Navigator.pop(context);
+      print("退出群組或移轉事項失敗: $e");
+    }
+  }
+  // ... 這裡是你 HomeScreen 裡面原本就有的其他各種 method (例如 _buildTodoQuery 或是 _fetchUserGroups)
+
+  // =========================================================
+  // 🎯 把這兩段「完全複製」，然後直接貼在 HomeScreen class 結束前的這個空白處：
+  // =========================================================
+  Widget _buildTrashTarget() {
+    return DragTarget<String>(
+      // 🎯 核心控制：只有在點了編輯筆 (_isReordering 為 true) 時，才接受拖曳進來的物件
+      onWillAcceptWithDetails: (details) => _isReordering,
+      onAcceptWithDetails: (details) {
+        final droppedGroupId = details.data;
+        _showExitGroupDialog(context, droppedGroupId);
+      },
+      builder: (context, candidateData, rejectedData) {
+        // 當滑鼠拖曳物件懸浮在上方，且當前處於編輯狀態
+        final bool isHovering = candidateData.isNotEmpty && _isReordering;
+
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          decoration: BoxDecoration(
+            // 平常是極淡的灰色，拖曳上去時變成醒目的紅色警告
+            color: isHovering ? Colors.red.shade50 : Colors.grey.shade50,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isHovering 
+                  ? Colors.red.shade300 
+                  : (_isReordering ? Colors.amber.shade300 : Colors.grey.shade200),
+              width: isHovering ? 2.0 : 1.0,
+            ),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                isHovering 
+                    ? Icons.delete_forever_rounded 
+                    : (_isReordering ? Icons.delete_sweep_rounded : Icons.delete_outline_rounded),
+                color: isHovering 
+                    ? Colors.red 
+                    : (_isReordering ? Colors.amber.shade700 : Colors.grey.shade400),
+                size: 20,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                isHovering 
+                    ? '放開滑鼠以退出' 
+                    : (_isReordering ? '拖曳至此退出小組' : '退出小組功能已關閉'),
+                style: TextStyle(
+                  color: isHovering 
+                      ? Colors.red.shade700 
+                      : (_isReordering ? Colors.amber.shade900 : Colors.grey.shade500),
+                  fontSize: 12,
+                  fontWeight: isHovering || _isReordering ? FontWeight.bold : FontWeight.normal,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  
+
+} 

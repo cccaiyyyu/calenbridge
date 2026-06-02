@@ -17,38 +17,60 @@ class NotificationScreen extends StatelessWidget {
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser == null) return;
 
-    final db = FirebaseFirestore.instance;
-    final batch = db.batch();
+    // 🎯 1. 點擊瞬間立刻彈出轉圈圈，鎖定畫面防重複點擊
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(
+        child: CircularProgressIndicator(color: Color(0xFF203764)),
+      ),
+    );
 
-    batch.update(db.collection('notifications').doc(notifId), {
-      'status': accepted ? 'accepted' : 'rejected',
-      'isRead': true,
-    });
+    try {
+      final db = FirebaseFirestore.instance;
+      final batch = db.batch();
 
-    if (accepted) {
-      batch.update(db.collection('groups').doc(groupId), {
-        'memberIds': FieldValue.arrayUnion([currentUser.uid]),
-        'pendingInvites': FieldValue.arrayRemove([currentUser.email]),
-        'memberPermissions.${currentUser.uid}': {'canAssignTask': canAssignTask},
+      batch.update(db.collection('notifications').doc(notifId), {
+        'status': accepted ? 'accepted' : 'rejected',
+        'isRead': true,
       });
-      batch.update(db.collection('users').doc(currentUser.uid), {
-        'groupIds': FieldValue.arrayUnion([groupId]),
-      });
-    } else {
-      batch.update(db.collection('groups').doc(groupId), {
-        'pendingInvites': FieldValue.arrayRemove([currentUser.email]),
-      });
-    }
 
-    await batch.commit();
+      if (accepted) {
+        batch.update(db.collection('groups').doc(groupId), {
+          'memberIds': FieldValue.arrayUnion([currentUser.uid]),
+          'pendingInvites': FieldValue.arrayRemove([currentUser.email]),
+          'memberPermissions.${currentUser.uid}': {'canAssignTask': canAssignTask},
+        });
+        batch.update(db.collection('users').doc(currentUser.uid), {
+          'groupIds': FieldValue.arrayUnion([groupId]),
+        });
+      } else {
+        batch.update(db.collection('groups').doc(groupId), {
+          'pendingInvites': FieldValue.arrayRemove([currentUser.email]),
+        });
+      }
 
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(accepted ? '已加入「$groupName」！' : '已拒絕邀請'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      // 執行寫入
+      await batch.commit();
+      
+      // 🎯 2. 給資料庫一小段緩衝時間定位，防止 UI 瞬間倒流閃現
+      await Future.delayed(const Duration(milliseconds: 300));
+
+    } catch (e) {
+      print("【CalenBridge 通知】處理群組邀請失敗: $e");
+    } finally {
+      // 🎯 3. 【關鍵修正】：不管成功或失敗，只要處理完畢，就一定要把轉圈圈關掉！
+      if (context.mounted) {
+        Navigator.pop(context); // 👈 關閉轉圈圈，讓畫面恢復正常
+        
+        // 彈出提示訊息
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(accepted ? '已加入「$groupName」！' : '已拒絕邀請'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
     }
   }
 
@@ -60,56 +82,70 @@ class NotificationScreen extends StatelessWidget {
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser == null) return;
 
-    final db = FirebaseFirestore.instance;
-    final batch = db.batch();
+    // 🎯 修正點 1：點擊瞬間立刻彈出轉圈圈，鎖定畫面防重複寫入
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(
+        child: CircularProgressIndicator(color: Color(0xFF203764)),
+      ),
+    );
 
-    // 1. 先抓出這則通知的詳細內容（這樣才能拿到任務名稱、群組 ID 等等）
-    final notifDoc = await db.collection('notifications').doc(notifId).get();
-    if (!notifDoc.exists) return;
-    
-    final notifData = notifDoc.data() as Map<String, dynamic>;
+    try {
+      final db = FirebaseFirestore.instance;
+      final batch = db.batch();
 
-    // 2. 更新通知本身的狀態為已讀、已接受/已拒絕
-    batch.update(db.collection('notifications').doc(notifId), {
-      'status': accepted ? 'accepted' : 'rejected',
-      'isRead': true,
-    });
-
-    // 3. ✨ 【核心修正】：如果組員「接受」了任務，真正把任務塞進 TODOS 集合中
-    if (accepted) {
-      // 🎯 修正點 1：將原本的 'tasks' 集合改成你的主畫面在使用的 'todos'
-      final todoRef = db.collection('todos').doc(); 
+      final notifDoc = await db.collection('notifications').doc(notifId).get();
+      if (!notifDoc.exists) {
+        if (context.mounted) Navigator.pop(context);
+        return;
+      }
       
-      batch.set(todoRef, {
-        'title': notifData['taskName'] ?? '未命名任務',
-        'note': '由組長 ${notifData['fromName'] ?? '組長'} 指派的任務',
-        'groupId': notifData['groupId'] ?? '',
-        'ownerUid': notifData['fromUserId'] ?? '',               // 建立者是組長
-        
-        // 🎯 修正點 2：完整對接你 `todos` 集合在用的指派欄位格式
-        'assignedTo': currentUser.uid,                           // 給組員的 UID
-        'assignedToUid': currentUser.uid,                        // 確保過濾器防呆
-        'assignedToEmail': currentUser.email ?? '',
-        
-        'isCompleted': false,                                    // 預設未完成
-        'startTime': DateTime.now().toIso8601String(),           // 預設當前時間
-        'endTime': DateTime.now().add(const Duration(hours: 1)).toIso8601String(),
-        'reminderSetting': "不提醒",
-        'repeatSetting': "不要",
-        'createdAt': FieldValue.serverTimestamp(),
+      final notifData = notifDoc.data();
+
+      batch.update(db.collection('notifications').doc(notifId), {
+        'status': accepted ? 'accepted' : 'rejected',
+        'isRead': true,
       });
-    }
 
-    // 4. 一口氣寫入資料庫
-    await batch.commit();
+      if (accepted && notifData != null) {
+        final todoRef = db.collection('todos').doc(); 
+        
+        batch.set(todoRef, {
+          'title': notifData['taskName'] ?? '未命名任務',
+          'note': '由組長 ${notifData['fromName'] ?? '組長'} 指派的任務',
+          'groupId': notifData['groupId'] ?? '',
+          'ownerUid': notifData['fromUserId'] ?? '',
+          'assignedTo': currentUser.uid,
+          'assignedToUid': currentUser.uid,
+          'assignedToEmail': currentUser.email ?? '',
+          'isCompleted': false,
+          'startTime': DateTime.now().toIso8601String(),
+          'endTime': DateTime.now().add(const Duration(hours: 1)).toIso8601String(),
+          'reminderSetting': "不提醒",
+          'repeatSetting': "不要",
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      }
 
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(accepted ? '已接受任務，已加入你的任務清單！' : '已拒絕任務'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      await batch.commit();
+      
+      // 🎯 修正點 2：給資料庫一小段緩衝時間定位
+      await Future.delayed(const Duration(milliseconds: 300));
+
+    } catch (e) {
+      print("【CalenBridge 通知】指派任務失敗: $e");
+    } finally {
+      // 🎯 修正點 3：安全關閉 Loading 遮罩
+      if (context.mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(accepted ? '已接受任務，已加入你的任務清單！' : '已拒絕任務'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
     }
   }
   
