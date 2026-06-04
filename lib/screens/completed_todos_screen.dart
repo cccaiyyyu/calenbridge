@@ -83,11 +83,10 @@ class CompletedTodosScreen extends StatelessWidget {
                     '完成時間：${_formatTime(todo['completedAt'])}',
                     style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
                   ),
-                  // 🎯 補回功能：按鈕文字一律顯示「確認」，並綁定復原邏輯
                   trailing: TextButton(
                     onPressed: () => _restoreTodo(context, doc.id, todo),
                     child: const Text(
-                      '確認', 
+                      '復原', 
                       style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF203764)),
                     ),
                   ),
